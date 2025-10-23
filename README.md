@@ -49,12 +49,21 @@ Alternatively, you can use environment variables:
 
 Actions are used with the new Terraform 1.14 action syntax:
 
+### Azure Automation Runbook Trigger
+
 ```hcl
-# Define an action
-action "azureactions_virtual_machine_power" "restart_vm" {
+# Define an automation runbook trigger action
+action "azureactions_automation_runbook_trigger" "restart_services" {
   config {
-    virtual_machine_id = azurerm_linux_virtual_machine.example.id
-    power_action       = "restart"
+    automation_account_name = "my-automation-account"
+    resource_group_name     = "my-resource-group"
+    runbook_name           = "Restart-Services"
+    parameters = {
+      ServiceName = "MyService"
+      Environment = "Production"
+    }
+    wait_for_completion = true
+    timeout_minutes     = 15
   }
 }
 
@@ -65,7 +74,70 @@ resource "azurerm_linux_virtual_machine" "example" {
   lifecycle {
     action_trigger {
       events  = [after_update]
-      actions = [action.azureactions_virtual_machine_power.restart_vm]
+      actions = [action.azureactions_automation_runbook_trigger.restart_services]
+    }
+  }
+}
+```
+
+### Example: Automated Maintenance Workflow
+
+```hcl
+terraform {
+  required_providers {
+    azureactions = {
+      source = "WebedMJ/azureactions"
+    }
+    azurerm = {
+      source = "hashicorp/azurerm"
+    }
+  }
+}
+
+provider "azureactions" {
+  subscription_id = var.subscription_id
+  client_id       = var.client_id
+  client_secret   = var.client_secret
+  tenant_id       = var.tenant_id
+}
+
+# Pre-maintenance runbook
+action "azureactions_automation_runbook_trigger" "pre_maintenance" {
+  config {
+    automation_account_name = azurerm_automation_account.example.name
+    resource_group_name     = azurerm_resource_group.example.name
+    runbook_name           = "Pre-Maintenance-Tasks"
+    parameters = {
+      ResourceGroup = azurerm_resource_group.example.name
+      Timestamp     = timestamp()
+    }
+    wait_for_completion = true
+    timeout_minutes     = 10
+  }
+}
+
+# Post-maintenance runbook
+action "azureactions_automation_runbook_trigger" "post_maintenance" {
+  config {
+    automation_account_name = azurerm_automation_account.example.name
+    resource_group_name     = azurerm_resource_group.example.name
+    runbook_name           = "Post-Maintenance-Tasks"
+    wait_for_completion     = false  # Fire and forget
+  }
+}
+
+resource "azurerm_linux_virtual_machine" "web_server" {
+  # ... VM configuration ...
+
+  lifecycle {
+    action_trigger {
+      events  = [before_update]
+      actions = [action.azureactions_automation_runbook_trigger.pre_maintenance]
+    }
+    
+    action_trigger {
+      events  = [after_update]
+      actions = [action.azureactions_automation_runbook_trigger.post_maintenance]
     }
   }
 }
@@ -73,10 +145,15 @@ resource "azurerm_linux_virtual_machine" "example" {
 
 ## Actions
 
-This provider is designed to support various Azure actions. The provider structure is ready for implementing actions such as:
+This provider supports various Azure actions:
 
+### Azure Automation
+- **`azureactions_automation_runbook_trigger`**: Triggers an Azure Automation runbook execution with optional parameter passing and completion waiting.
+
+### Planned Actions
+The provider structure is ready for implementing additional Azure actions such as:
 - Virtual Machine power operations (start, stop, restart)
-- App Service deployment slots management
+- App Service deployment slot management
 - Database scaling operations
 - Storage account maintenance tasks
 - And more...

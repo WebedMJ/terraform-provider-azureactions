@@ -3,6 +3,7 @@ module github.com/WebedMJ/terraform-provider-azureactions
 go 1.24.5
 
 require (
+	github.com/hashicorp/go-azure-sdk/resource-manager v0.20251016.1163854
 	github.com/hashicorp/go-azure-sdk/sdk v0.20251016.1163854
 	github.com/hashicorp/terraform-plugin-framework v1.16.0
 	github.com/hashicorp/terraform-plugin-go v0.29.0

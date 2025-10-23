@@ -37,12 +37,13 @@ func NewClient(ctx context.Context, config Config) (*Client, error) {
 		return nil, err
 	}
 
+	// Create authorizer for Azure Resource Manager
 	authorizer, err := auth.NewAuthorizerFromCredentials(ctx, auth.Credentials{
 		Environment:  *environment,
 		TenantID:     config.TenantID,
 		ClientID:     config.ClientID,
 		ClientSecret: config.ClientSecret,
-	}, environment.MicrosoftGraph)
+	}, environment.ResourceManager)
 	if err != nil {
 		return nil, err
 	}

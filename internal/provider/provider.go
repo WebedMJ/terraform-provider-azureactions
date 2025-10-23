@@ -9,6 +9,7 @@ import (
 
 	"github.com/WebedMJ/terraform-provider-azureactions/internal/clients"
 	"github.com/WebedMJ/terraform-provider-azureactions/internal/sdk"
+	"github.com/WebedMJ/terraform-provider-azureactions/internal/services/automation"
 	"github.com/WebedMJ/terraform-provider-azureactions/internal/services/compute"
 	"github.com/hashicorp/terraform-plugin-framework/action"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
@@ -190,6 +191,7 @@ func (p *azureActionsProvider) Resources(_ context.Context) []func() resource.Re
 
 func SupportedServices() []sdk.ServiceRegistration {
 	return []sdk.ServiceRegistration{
+		automation.Registration{},
 		compute.Registration{},
 		// Additional services can be added here as they are implemented
 	}
