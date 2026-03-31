@@ -49,9 +49,14 @@ Each service area has:
 
 ### Action Metadata (`internal/sdk/action.go`)
 
-`sdk.ActionMetadata` provides `r.Client` (populated in `Configure`) and `r.SubscriptionId`. Embed it in every action struct.
+`sdk.ActionMetadata` provides `r.Client` (populated in `Configure`) and `r.SubscriptionID`. Embed it in every action struct.
 
 ## Coding Standards
+
+### Go Conventions
+- Follow [Go code review guidelines](https://github.com/golang/go/wiki/CodeReviewComments) at all times
+- **Acronyms in identifiers must be all-caps**: use `ID`, `URL`, `HTTP`, `API`, `ARM`, `PAT` — never `Id`, `Url`, `Http` etc. This applies to struct fields, method names, local variables, and function parameters. Examples: `SubscriptionID`, `TenantID`, `ClientID`, `OrganizationURL`
+- Use `gofmt`-compliant formatting; run `make fmt` before committing
 
 ### Terraform Best Practices
 - Use `terraform-plugin-framework` types (`types.String`, `types.Bool`, etc.) in all model structs
