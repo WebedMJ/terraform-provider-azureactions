@@ -18,9 +18,9 @@ type Client struct {
 }
 
 type Account struct {
-	SubscriptionId string
-	TenantId       string
-	ClientId       string
+	SubscriptionID string
+	TenantID       string
+	ClientID       string
 	Environment    string
 }
 
@@ -51,9 +51,9 @@ func NewClient(ctx context.Context, config Config) (*Client, error) {
 
 	return &Client{
 		Account: Account{
-			SubscriptionId: config.SubscriptionID,
-			TenantId:       config.TenantID,
-			ClientId:       config.ClientID,
+			SubscriptionID: config.SubscriptionID,
+			TenantID:       config.TenantID,
+			ClientID:       config.ClientID,
 			Environment:    config.Environment,
 		},
 		Config:      config,

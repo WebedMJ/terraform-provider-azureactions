@@ -43,9 +43,9 @@ func (m *mockAuthorizer) AuxiliaryTokens(_ context.Context, _ *http.Request) ([]
 func newTestClient(serverURL string) *clients.Client {
 	return &clients.Client{
 		Account: clients.Account{
-			SubscriptionId: "test-subscription-id",
-			TenantId:       "test-tenant-id",
-			ClientId:       "test-client-id",
+			SubscriptionID: "test-subscription-id",
+			TenantID:       "test-tenant-id",
+			ClientID:       "test-client-id",
 			Environment:    "public",
 		},
 		Config: clients.Config{

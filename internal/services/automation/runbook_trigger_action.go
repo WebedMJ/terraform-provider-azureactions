@@ -119,7 +119,7 @@ func (r *RunbookTriggerAction) Invoke(ctx context.Context, request action.Invoke
 
 	// Create job
 	jobName := fmt.Sprintf("terraform-action-%d", time.Now().Unix())
-	jobId := job.NewJobID(r.SubscriptionId, model.ResourceGroupName.ValueString(), model.AutomationAccountName.ValueString(), jobName)
+	jobId := job.NewJobID(r.SubscriptionID, model.ResourceGroupName.ValueString(), model.AutomationAccountName.ValueString(), jobName)
 
 	createJobPayload := job.JobCreateParameters{
 		Properties: job.JobCreateProperties{

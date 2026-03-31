@@ -30,10 +30,10 @@ var (
 )
 
 type azureActionsProviderModel struct {
-	SubscriptionId types.String `tfsdk:"subscription_id"`
-	ClientId       types.String `tfsdk:"client_id"`
+	SubscriptionID types.String `tfsdk:"subscription_id"`
+	ClientID       types.String `tfsdk:"client_id"`
 	ClientSecret   types.String `tfsdk:"client_secret"`
-	TenantId       types.String `tfsdk:"tenant_id"`
+	TenantID       types.String `tfsdk:"tenant_id"`
 	Environment    types.String `tfsdk:"environment"`
 }
 
@@ -89,15 +89,15 @@ func (p *azureActionsProvider) Configure(ctx context.Context, request provider.C
 	config := clients.Config{}
 
 	// Set subscription ID from config or environment
-	if !data.SubscriptionId.IsNull() && !data.SubscriptionId.IsUnknown() {
-		config.SubscriptionID = data.SubscriptionId.ValueString()
+	if !data.SubscriptionID.IsNull() && !data.SubscriptionID.IsUnknown() {
+		config.SubscriptionID = data.SubscriptionID.ValueString()
 	} else if subscriptionId := os.Getenv("ARM_SUBSCRIPTION_ID"); subscriptionId != "" {
 		config.SubscriptionID = subscriptionId
 	}
 
 	// Set client ID from config or environment
-	if !data.ClientId.IsNull() && !data.ClientId.IsUnknown() {
-		config.ClientID = data.ClientId.ValueString()
+	if !data.ClientID.IsNull() && !data.ClientID.IsUnknown() {
+		config.ClientID = data.ClientID.ValueString()
 	} else if clientId := os.Getenv("ARM_CLIENT_ID"); clientId != "" {
 		config.ClientID = clientId
 	}
@@ -110,8 +110,8 @@ func (p *azureActionsProvider) Configure(ctx context.Context, request provider.C
 	}
 
 	// Set tenant ID from config or environment
-	if !data.TenantId.IsNull() && !data.TenantId.IsUnknown() {
-		config.TenantID = data.TenantId.ValueString()
+	if !data.TenantID.IsNull() && !data.TenantID.IsUnknown() {
+		config.TenantID = data.TenantID.ValueString()
 	} else if tenantId := os.Getenv("ARM_TENANT_ID"); tenantId != "" {
 		config.TenantID = tenantId
 	}

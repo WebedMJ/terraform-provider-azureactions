@@ -18,7 +18,7 @@ type Action interface {
 type ActionMetadata struct {
 	Client *clients.Client
 
-	SubscriptionId string
+	SubscriptionID string
 }
 
 func (a *ActionMetadata) Defaults(_ context.Context, request action.ConfigureRequest, response *action.ConfigureResponse) {
@@ -33,7 +33,7 @@ func (a *ActionMetadata) Defaults(_ context.Context, request action.ConfigureReq
 	}
 
 	a.Client = c
-	a.SubscriptionId = c.Account.SubscriptionId
+	a.SubscriptionID = c.Account.SubscriptionID
 }
 
 // SetResponseErrorDiagnostic is a helper function to set error diagnostics on action responses
