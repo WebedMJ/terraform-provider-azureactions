@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/WebedMJ/terraform-provider-azureactions/internal/clients"
+	"github.com/hashicorp/go-azure-sdk/sdk/auth"
 	"github.com/hashicorp/go-azure-sdk/sdk/environments"
 	"github.com/hashicorp/terraform-plugin-framework/action"
 	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
@@ -65,12 +66,16 @@ func newDevOpsTestClient() *clients.Client {
 //   - the test client (for service_principal auth)
 //   - an HTTP client whose transport rewrites the host to the test server
 //   - a short poll interval so wait_for_completion tests finish quickly
+//   - a mock DevOps authorizer factory to avoid real Azure AD calls in SP auth tests
 func newTestAction(server *httptest.Server) *PipelineTriggerAction {
 	a := &PipelineTriggerAction{
 		httpClient: &http.Client{
 			Transport: &hostRewriteTransport{host: serverHost(server.URL)},
 		},
 		pollInterval: 50 * time.Millisecond,
+		devOpsAuthorizerFactory: func(_ context.Context) (auth.Authorizer, error) {
+			return &devOpsMockAuthorizer{}, nil
+		},
 	}
 	req := action.ConfigureRequest{ProviderData: newDevOpsTestClient()}
 	resp := &action.ConfigureResponse{}

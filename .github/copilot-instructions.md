@@ -51,6 +51,15 @@ Each service area has:
 
 `sdk.ActionMetadata` provides `r.Client` (populated in `Configure`) and `r.SubscriptionID`. Embed it in every action struct.
 
+## Security Critical Issues
+
+Review every change for:
+- Hardcoded secrets, API keys, PAT tokens, or credentials — these must never appear in source code
+- Credentials passed in log messages or progress events — use `[REDACTED]` if auth details must appear
+- Missing input validation before Azure API calls
+- Context leaks: always call `defer cancel()` immediately after `context.WithTimeout`
+- Error wrapping: always use `%w` in `fmt.Errorf` to preserve error chains for diagnostics
+
 ## Coding Standards
 
 ### Go Conventions
@@ -58,9 +67,23 @@ Each service area has:
 - **Acronyms in identifiers must be all-caps**: use `ID`, `URL`, `HTTP`, `API`, `ARM`, `PAT` — never `Id`, `Url`, `Http` etc. This applies to struct fields, method names, local variables, and function parameters. Examples: `SubscriptionID`, `TenantID`, `ClientID`, `OrganizationURL`
 - Use `gofmt`-compliant formatting; run `make fmt` before committing
 
+```go
+// Avoid
+type Account struct {
+    SubscriptionId string
+    TenantId       string
+}
+
+// Prefer
+type Account struct {
+    SubscriptionID string
+    TenantID       string
+}
+```
+
 ### Terraform Best Practices
 - Use `terraform-plugin-framework` types (`types.String`, `types.Bool`, etc.) in all model structs
-- Mark sensitive attributes with `Sensitive: true` in schema (e.g. tokens, secrets)
+- Mark sensitive attributes with `Sensitive: true` in **provider** and **resource** schemas (e.g. tokens, secrets). Action schemas (`action/schema`) do not support `Sensitive: true` — see **Security Defaults** below for the correct approach.
 - All required fields validated in `Invoke` before making API calls
 - Use `response.Diagnostics.AddError()` / `sdk.SetResponseErrorDiagnostic()` for errors
 - Use `response.SendProgress()` to report long-running operation status

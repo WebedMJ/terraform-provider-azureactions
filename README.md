@@ -239,7 +239,9 @@ go test ./internal/services/devops/... -v
 
 ### Running Acceptance Tests (requires real Azure credentials)
 
-Acceptance tests make real API calls to Azure. Set the following environment variables before running:
+> **Note:** Acceptance tests are not yet implemented. The `make testacc` target and `TF_ACC`-tagged test files are placeholders for future end-to-end tests that make real API calls to Azure.
+
+When acceptance tests are added, they will require the following environment variables:
 
 ```bash
 export ARM_SUBSCRIPTION_ID="your-subscription-id"
@@ -247,7 +249,7 @@ export ARM_CLIENT_ID="your-client-id"
 export ARM_CLIENT_SECRET="your-client-secret"
 export ARM_TENANT_ID="your-tenant-id"
 
-# Run acceptance tests
+# Run acceptance tests (once implemented)
 make testacc
 ```
 

@@ -11,10 +11,12 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
 	"github.com/WebedMJ/terraform-provider-azureactions/internal/sdk"
+	"github.com/hashicorp/go-azure-sdk/sdk/auth"
 	"github.com/hashicorp/terraform-plugin-framework/action"
 	"github.com/hashicorp/terraform-plugin-framework/action/schema"
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -38,6 +40,9 @@ type PipelineTriggerAction struct {
 	// pollInterval is used in tests to override the default polling interval.
 	// A zero value uses defaultPollSeconds.
 	pollInterval time.Duration
+	// devOpsAuthorizerFactory allows tests to inject a mock authorizer for SP auth.
+	// A nil value uses auth.NewAuthorizerFromCredentials with the provider credentials.
+	devOpsAuthorizerFactory func(ctx context.Context) (auth.Authorizer, error)
 }
 
 var _ sdk.Action = &PipelineTriggerAction{}
@@ -193,8 +198,14 @@ func (p *PipelineTriggerAction) Invoke(ctx context.Context, request action.Invok
 	}
 
 	orgURL := strings.TrimRight(model.OrganizationURL.ValueString(), "/")
-	project := model.Project.ValueString()
+	project := url.PathEscape(model.Project.ValueString())
 	pipelineID := model.PipelineID.ValueInt64()
+
+	if pipelineID <= 0 {
+		sdk.SetResponseErrorDiagnostic(response, "invalid pipeline_id",
+			fmt.Errorf("pipeline_id must be greater than 0, got %d", pipelineID))
+		return
+	}
 
 	triggerURL := fmt.Sprintf("%s/%s/_apis/pipelines/%d/runs?api-version=%s",
 		orgURL, project, pipelineID, devOpsAPIVersion)
@@ -218,6 +229,12 @@ func (p *PipelineTriggerAction) Invoke(ctx context.Context, request action.Invok
 		timeoutMinutes := int64(30)
 		if !model.TimeoutMinutes.IsNull() && !model.TimeoutMinutes.IsUnknown() {
 			timeoutMinutes = model.TimeoutMinutes.ValueInt64()
+		}
+
+		if timeoutMinutes < 1 {
+			sdk.SetResponseErrorDiagnostic(response, "invalid timeout_minutes",
+				fmt.Errorf("timeout_minutes must be at least 1, got %d", timeoutMinutes))
+			return
 		}
 
 		waitCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutMinutes)*time.Minute)
@@ -256,8 +273,29 @@ func (p *PipelineTriggerAction) resolveAuthHeader(ctx context.Context, model Pip
 		if p.Client == nil {
 			return "", fmt.Errorf("provider client is not configured; ensure the provider block is set up with valid service principal credentials")
 		}
-		// Obtain an Azure AD token scoped to Azure DevOps
-		token, err := p.Client.Authorizer.Token(ctx, nil)
+		// Create a dedicated authorizer scoped to Azure DevOps (not ARM).
+		// Azure DevOps requires an AAD token with audience 499b84ac-1321-427f-aa17-267ca6975798.
+		var devOpsAuth auth.Authorizer
+		if p.devOpsAuthorizerFactory != nil {
+			var err error
+			devOpsAuth, err = p.devOpsAuthorizerFactory(ctx)
+			if err != nil {
+				return "", fmt.Errorf("creating Azure DevOps authorizer: %w", err)
+			}
+		} else {
+			var err error
+			devOpsAuth, err = auth.NewAuthorizerFromCredentials(ctx, auth.Credentials{
+				Environment:                           *p.Client.Environment,
+				TenantID:                              p.Client.Config.TenantID,
+				ClientID:                              p.Client.Config.ClientID,
+				ClientSecret:                          p.Client.Config.ClientSecret,
+				EnableAuthenticatingUsingClientSecret: true,
+			}, p.Client.Environment.AzureDevOps)
+			if err != nil {
+				return "", fmt.Errorf("creating Azure DevOps authorizer: %w", err)
+			}
+		}
+		token, err := devOpsAuth.Token(ctx, nil)
 		if err != nil {
 			return "", fmt.Errorf("obtaining Azure DevOps token: %w", err)
 		}
