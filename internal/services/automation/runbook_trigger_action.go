@@ -18,6 +18,9 @@ import (
 
 type RunbookTriggerAction struct {
 	sdk.ActionMetadata
+	// pollInterval is used in tests to override the default 10-second polling interval.
+	// A zero value uses the default of 10 seconds.
+	pollInterval time.Duration
 }
 
 var _ sdk.Action = &RunbookTriggerAction{}
@@ -163,7 +166,11 @@ func (r *RunbookTriggerAction) Invoke(ctx context.Context, request action.Invoke
 		})
 
 		// Poll job status
-		ticker := time.NewTicker(10 * time.Second)
+		interval := r.pollInterval
+		if interval <= 0 {
+			interval = 10 * time.Second
+		}
+		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 
 		for {

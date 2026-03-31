@@ -12,6 +12,7 @@ import (
 
 type Client struct {
 	Account     Account
+	Config      Config
 	Environment *environments.Environment
 	Authorizer  auth.Authorizer
 }
@@ -55,6 +56,7 @@ func NewClient(ctx context.Context, config Config) (*Client, error) {
 			ClientId:       config.ClientID,
 			Environment:    config.Environment,
 		},
+		Config:      config,
 		Environment: environment,
 		Authorizer:  authorizer,
 	}, nil
