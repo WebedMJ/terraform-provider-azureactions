@@ -380,7 +380,7 @@ func (p *PipelineTriggerAction) waitForPipelineRun(ctx context.Context, response
 	for {
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("timeout waiting for pipeline run %d to complete", runID)
+			return fmt.Errorf("waiting for pipeline run %d to complete: %w", runID, ctx.Err())
 		case <-ticker.C:
 			run, err := p.getPipelineRun(ctx, statusURL, authHeader)
 			if err != nil {
