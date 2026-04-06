@@ -14,12 +14,14 @@ This provider enables Terraform actions for Azure resources, allowing you to per
 ## Building the Provider
 
 1. Clone the repository:
+
 ```bash
 git clone https://github.com/WebedMJ/terraform-provider-azureactions
 cd terraform-provider-azureactions
 ```
 
 2. Build and install the provider:
+
 ```bash
 make build
 ```
@@ -39,6 +41,7 @@ provider "azureactions" {
 ```
 
 Alternatively, you can use environment variables:
+
 - `ARM_SUBSCRIPTION_ID`
 - `ARM_CLIENT_ID`
 - `ARM_CLIENT_SECRET`
@@ -134,7 +137,7 @@ resource "azurerm_linux_virtual_machine" "web_server" {
       events  = [before_update]
       actions = [action.azureactions_automation_runbook_trigger.pre_maintenance]
     }
-    
+
     action_trigger {
       events  = [after_update]
       actions = [action.azureactions_automation_runbook_trigger.post_maintenance]
@@ -206,14 +209,17 @@ action "azureactions_devops_pipeline_trigger" "deploy_sp" {
 This provider supports various Azure actions:
 
 ### Azure Automation
+
 - **`azureactions_automation_runbook_trigger`**: Triggers an Azure Automation runbook execution with optional parameter passing and completion waiting.
 
 ### Azure DevOps
+
 - **`azureactions_devops_pipeline_trigger`**: Triggers an Azure DevOps pipeline run. Supports Personal Access Token (PAT) and service principal (Azure AD) authentication. Supports branch overrides, pipeline variables, template parameters, stage skipping, and optional waiting for completion.
 
 ### Planned Actions
+
 The provider structure is ready for implementing additional Azure actions such as:
-- Virtual Machine power operations (start, stop, restart)
+
 - App Service deployment slot management
 - Database scaling operations
 - Storage account maintenance tasks
@@ -256,6 +262,7 @@ make testacc
 ### CI
 
 Tests run automatically on every pull request via the GitHub Actions workflow defined in `.github/workflows/test.yml`. The workflow runs:
+
 1. `gofmt` formatting check
 2. `go vet` static analysis
 3. All unit tests (`go test ./...`)
