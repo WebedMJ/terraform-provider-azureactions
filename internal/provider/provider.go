@@ -6,11 +6,11 @@ package provider
 import (
 	"context"
 	"os"
+	"strings"
 
 	"github.com/WebedMJ/terraform-provider-azureactions/internal/clients"
 	"github.com/WebedMJ/terraform-provider-azureactions/internal/sdk"
 	"github.com/WebedMJ/terraform-provider-azureactions/internal/services/automation"
-	"github.com/WebedMJ/terraform-provider-azureactions/internal/services/compute"
 	"github.com/WebedMJ/terraform-provider-azureactions/internal/services/devops"
 	"github.com/hashicorp/terraform-plugin-framework/action"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
@@ -23,6 +23,18 @@ import (
 type azureActionsProvider struct {
 	version string
 }
+
+const (
+	envAzureSubscriptionID = "AZURE_SUBSCRIPTION_ID"
+	envARMSubscriptionID   = "ARM_SUBSCRIPTION_ID"
+	envAzureClientID       = "AZURE_CLIENT_ID"
+	envARMClientID         = "ARM_CLIENT_ID"
+	envAzureClientSecret   = "AZURE_CLIENT_SECRET"
+	envARMClientSecret     = "ARM_CLIENT_SECRET"
+	envAzureTenantID       = "AZURE_TENANT_ID"
+	envARMTenantID         = "ARM_TENANT_ID"
+	envARMEnvironment      = "ARM_ENVIRONMENT"
+)
 
 var (
 	_ provider.Provider            = &azureActionsProvider{}
@@ -56,20 +68,20 @@ func (p *azureActionsProvider) Schema(_ context.Context, _ provider.SchemaReques
 		Attributes: map[string]schema.Attribute{
 			"subscription_id": schema.StringAttribute{
 				Optional:            true,
-				MarkdownDescription: "The Azure Subscription ID which should be used.",
+				MarkdownDescription: "The Azure Subscription ID. Required for Azure resource management actions (e.g. Automation); may be omitted for Azure DevOps actions using PAT or DefaultAzureCredential authentication. Can also be supplied via `AZURE_SUBSCRIPTION_ID` (with `ARM_SUBSCRIPTION_ID` supported as an equivalent alias).",
 			},
 			"client_id": schema.StringAttribute{
 				Optional:            true,
-				MarkdownDescription: "The Client ID which should be used for authentication.",
+				MarkdownDescription: "Optional Client ID override. Use together with `tenant_id` and `client_secret` for explicit client-secret authentication, or prefer `AZURE_CLIENT_ID` environment configuration when using DefaultAzureCredential (`ARM_CLIENT_ID` is supported as an equivalent alias).",
 			},
 			"client_secret": schema.StringAttribute{
 				Optional:            true,
 				Sensitive:           true,
-				MarkdownDescription: "The Client Secret which should be used for authentication.",
+				MarkdownDescription: "Optional Client Secret override. When set, `client_id` and `tenant_id` must also be provided. Otherwise omit all three and let DefaultAzureCredential authenticate via Azure CLI, workload identity, managed identity, or environment configuration (`ARM_CLIENT_SECRET` is supported as an equivalent alias to `AZURE_CLIENT_SECRET`).",
 			},
 			"tenant_id": schema.StringAttribute{
 				Optional:            true,
-				MarkdownDescription: "The Tenant ID which should be used for authentication.",
+				MarkdownDescription: "Optional Tenant ID override. This can also guide DefaultAzureCredential and may be supplied via `AZURE_TENANT_ID` (`ARM_TENANT_ID` is supported as an equivalent alias).",
 			},
 			"environment": schema.StringAttribute{
 				Optional:            true,
@@ -89,33 +101,11 @@ func (p *azureActionsProvider) Configure(ctx context.Context, request provider.C
 
 	config := clients.Config{}
 
-	// Set subscription ID from config or environment
-	if !data.SubscriptionID.IsNull() && !data.SubscriptionID.IsUnknown() {
-		config.SubscriptionID = data.SubscriptionID.ValueString()
-	} else if subscriptionId := os.Getenv("ARM_SUBSCRIPTION_ID"); subscriptionId != "" {
-		config.SubscriptionID = subscriptionId
-	}
-
-	// Set client ID from config or environment
-	if !data.ClientID.IsNull() && !data.ClientID.IsUnknown() {
-		config.ClientID = data.ClientID.ValueString()
-	} else if clientId := os.Getenv("ARM_CLIENT_ID"); clientId != "" {
-		config.ClientID = clientId
-	}
-
-	// Set client secret from config or environment
-	if !data.ClientSecret.IsNull() && !data.ClientSecret.IsUnknown() {
-		config.ClientSecret = data.ClientSecret.ValueString()
-	} else if clientSecret := os.Getenv("ARM_CLIENT_SECRET"); clientSecret != "" {
-		config.ClientSecret = clientSecret
-	}
-
-	// Set tenant ID from config or environment
-	if !data.TenantID.IsNull() && !data.TenantID.IsUnknown() {
-		config.TenantID = data.TenantID.ValueString()
-	} else if tenantId := os.Getenv("ARM_TENANT_ID"); tenantId != "" {
-		config.TenantID = tenantId
-	}
+	// Resolve provider values first, then AZURE_* env vars, then ARM_* aliases.
+	config.SubscriptionID = providerValueOrEnv(data.SubscriptionID, envAzureSubscriptionID, envARMSubscriptionID)
+	config.ClientID = providerValueOrEnv(data.ClientID, envAzureClientID, envARMClientID)
+	config.ClientSecret = providerValueOrEnv(data.ClientSecret, envAzureClientSecret, envARMClientSecret)
+	config.TenantID = providerValueOrEnv(data.TenantID, envAzureTenantID, envARMTenantID)
 
 	// Set environment from config or environment, default to public
 	environment := "public"
@@ -126,35 +116,10 @@ func (p *azureActionsProvider) Configure(ctx context.Context, request provider.C
 	}
 	config.Environment = environment
 
-	// Validate required fields
-	if config.SubscriptionID == "" {
+	if strings.TrimSpace(config.ClientSecret) != "" && (strings.TrimSpace(config.ClientID) == "" || strings.TrimSpace(config.TenantID) == "") {
 		response.Diagnostics.AddError(
-			"Missing Azure Subscription ID",
-			"subscription_id must be provided either via provider configuration or ARM_SUBSCRIPTION_ID environment variable",
-		)
-		return
-	}
-
-	if config.ClientID == "" {
-		response.Diagnostics.AddError(
-			"Missing Azure Client ID",
-			"client_id must be provided either via provider configuration or ARM_CLIENT_ID environment variable",
-		)
-		return
-	}
-
-	if config.ClientSecret == "" {
-		response.Diagnostics.AddError(
-			"Missing Azure Client Secret",
-			"client_secret must be provided either via provider configuration or ARM_CLIENT_SECRET environment variable",
-		)
-		return
-	}
-
-	if config.TenantID == "" {
-		response.Diagnostics.AddError(
-			"Missing Azure Tenant ID",
-			"tenant_id must be provided either via provider configuration or ARM_TENANT_ID environment variable",
+			"Incomplete explicit credential configuration",
+			"When client_secret is provided, client_id and tenant_id must also be provided. Otherwise omit all three and let DefaultAzureCredential authenticate via Azure CLI, managed identity, workload identity, or environment configuration.",
 		)
 		return
 	}
@@ -194,7 +159,24 @@ func (p *azureActionsProvider) Resources(_ context.Context) []func() resource.Re
 func SupportedServices() []sdk.ServiceRegistration {
 	return []sdk.ServiceRegistration{
 		automation.Registration{},
-		compute.Registration{},
 		devops.Registration{},
 	}
+}
+
+func providerValueOrEnv(value types.String, envKeys ...string) string {
+	if !value.IsNull() && !value.IsUnknown() {
+		return strings.TrimSpace(value.ValueString())
+	}
+
+	return firstNonEmptyEnv(envKeys...)
+}
+
+func firstNonEmptyEnv(keys ...string) string {
+	for _, key := range keys {
+		if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+			return value
+		}
+	}
+
+	return ""
 }

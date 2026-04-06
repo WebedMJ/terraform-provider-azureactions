@@ -26,6 +26,7 @@ const (
 	devOpsAPIVersion   = "7.1"
 	authMethodPAT      = "pat"
 	authMethodSP       = "service_principal"
+	authMethodDAC      = "default_azure_credential"
 	defaultPollSeconds = 15
 )
 
@@ -123,7 +124,7 @@ func (p *PipelineTriggerAction) Schema(_ context.Context, _ action.SchemaRequest
 			"auth_method": schema.StringAttribute{
 				Required: true,
 				MarkdownDescription: "Authentication method to use. Accepted values: " +
-					"`pat` (Personal Access Token) or `service_principal` (Azure AD service principal – reuses the provider-level credentials).",
+					"`pat` (Personal Access Token) or `default_azure_credential` (reuses the provider-level Azure credential chain). `service_principal` is retained as a backwards-compatible alias for `default_azure_credential`.",
 			},
 			"personal_access_token": schema.StringAttribute{
 				Optional: true,
@@ -177,9 +178,9 @@ func (p *PipelineTriggerAction) Invoke(ctx context.Context, request action.Invok
 
 	// Validate auth_method
 	authMethod := model.AuthMethod.ValueString()
-	if authMethod != authMethodPAT && authMethod != authMethodSP {
+	if authMethod != authMethodPAT && authMethod != authMethodSP && authMethod != authMethodDAC {
 		sdk.SetResponseErrorDiagnostic(response, "invalid auth_method",
-			fmt.Sprintf("auth_method must be %q or %q, got %q", authMethodPAT, authMethodSP, authMethod))
+			fmt.Sprintf("auth_method must be %q, %q, or %q, got %q", authMethodPAT, authMethodDAC, authMethodSP, authMethod))
 		return
 	}
 
@@ -269,9 +270,9 @@ func (p *PipelineTriggerAction) resolveAuthHeader(ctx context.Context, model Pip
 		encoded := base64.StdEncoding.EncodeToString([]byte(":" + model.PersonalAccessToken.ValueString()))
 		return "Basic " + encoded, nil
 
-	case authMethodSP:
+	case authMethodSP, authMethodDAC:
 		if p.Client == nil {
-			return "", fmt.Errorf("provider client is not configured; ensure the provider block is set up with valid service principal credentials")
+			return "", fmt.Errorf("provider client is not configured; ensure the provider block is set up with valid Azure credentials")
 		}
 		// Create a dedicated authorizer scoped to Azure DevOps (not ARM).
 		// Azure DevOps requires an AAD token with audience 499b84ac-1321-427f-aa17-267ca6975798.
@@ -284,13 +285,7 @@ func (p *PipelineTriggerAction) resolveAuthHeader(ctx context.Context, model Pip
 			}
 		} else {
 			var err error
-			devOpsAuth, err = auth.NewAuthorizerFromCredentials(ctx, auth.Credentials{
-				Environment:                           *p.Client.Environment,
-				TenantID:                              p.Client.Config.TenantID,
-				ClientID:                              p.Client.Config.ClientID,
-				ClientSecret:                          p.Client.Config.ClientSecret,
-				EnableAuthenticatingUsingClientSecret: true,
-			}, p.Client.Environment.AzureDevOps)
+			devOpsAuth, err = p.Client.AuthorizerFor(p.Client.Environment.AzureDevOps)
 			if err != nil {
 				return "", fmt.Errorf("creating Azure DevOps authorizer: %w", err)
 			}

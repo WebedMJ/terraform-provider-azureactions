@@ -15,17 +15,15 @@ import (
 	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 )
 
-// TestAccRunbookTriggerAction_Basic is a placeholder acceptance test.
-// Acceptance tests require real Azure infrastructure and service principal credentials.
+// TestAccRunbookTriggerAction_Basic validates the DefaultAzureCredential-backed
+// Azure authentication path against real Automation infrastructure.
 // To run acceptance tests:
 //
 //	TF_ACC=1 go test -v -timeout 5m ./internal/services/automation/...
 //
-// And set the following environment variables:
-//	ARM_SUBSCRIPTION_ID
-//	ARM_CLIENT_ID
-//	ARM_CLIENT_SECRET
-//	ARM_TENANT_ID
+// And set the following environment variables as needed for your credential source:
+//
+//	AZURE_SUBSCRIPTION_ID (or ARM_SUBSCRIPTION_ID alias)
 func TestAccRunbookTriggerAction_Basic(t *testing.T) {
 	if os.Getenv("TF_ACC") == "" {
 		t.Skip("Skipping acceptance test; set TF_ACC=1 to run")

@@ -24,55 +24,23 @@ var testAccProtoV6ProviderFactories = map[string]func() (tfprotov6.ProviderServe
 // testAccPreCheck validates that the required environment variables are set
 // for running acceptance tests.
 func testAccPreCheck(t *testing.T) {
-	if v := os.Getenv("ARM_SUBSCRIPTION_ID"); v == "" {
-		t.Fatal("ARM_SUBSCRIPTION_ID must be set for acceptance tests")
-	}
-	if v := os.Getenv("ARM_CLIENT_ID"); v == "" {
-		t.Fatal("ARM_CLIENT_ID must be set for acceptance tests")
-	}
-	if v := os.Getenv("ARM_CLIENT_SECRET"); v == "" {
-		t.Fatal("ARM_CLIENT_SECRET must be set for acceptance tests")
-	}
-	if v := os.Getenv("ARM_TENANT_ID"); v == "" {
-		t.Fatal("ARM_TENANT_ID must be set for acceptance tests")
+	if v := os.Getenv("AZURE_SUBSCRIPTION_ID"); v == "" && os.Getenv("ARM_SUBSCRIPTION_ID") == "" {
+		t.Fatal("AZURE_SUBSCRIPTION_ID or ARM_SUBSCRIPTION_ID must be set for acceptance tests")
 	}
 }
 
 // testAccProviderConfig returns the HCL provider configuration for acceptance tests.
 func testAccProviderConfig() string {
+	subscriptionID := os.Getenv("AZURE_SUBSCRIPTION_ID")
+	if subscriptionID == "" {
+		subscriptionID = os.Getenv("ARM_SUBSCRIPTION_ID")
+	}
+
 	return `
 provider "azureactions" {
-  subscription_id = var.subscription_id
-  client_id       = var.client_id
-  client_secret   = var.client_secret
-  tenant_id       = var.tenant_id
-}
-
-variable "subscription_id" {
-  type    = string
-  default = ""
-}
-
-variable "client_id" {
-  type    = string
-  default = ""
-}
-
-variable "client_secret" {
-  type    = string
-  default = ""
-}
-
-variable "tenant_id" {
-  type    = string
-  default = ""
+	subscription_id = "` + subscriptionID + `"
 }
 `
-}
-
-// testAccProviderFactories returns a map of provider factories for acceptance tests.
-func testAccProviderFactories() map[string]func() (tfprotov6.ProviderServer, error) {
-	return testAccProtoV6ProviderFactories
 }
 
 // testAccPreCheckAzureAutomation validates prerequisites for Azure Automation acceptance tests.

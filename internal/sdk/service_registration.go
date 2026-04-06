@@ -8,9 +8,6 @@ import (
 )
 
 type ServiceRegistration interface {
-	// Name returns the name of the service
-	Name() string
-
 	// Actions returns the actions supported by this service
 	Actions() []func() action.Action
 }

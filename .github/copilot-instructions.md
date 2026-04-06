@@ -147,17 +147,18 @@ type Account struct {
 
 The provider supports:
 
-| Method                     | Config / Env vars                                                                                 |
-| -------------------------- | ------------------------------------------------------------------------------------------------- |
-| Service Principal (secret) | `client_id`, `client_secret`, `tenant_id` / `ARM_CLIENT_ID`, `ARM_CLIENT_SECRET`, `ARM_TENANT_ID` |
-| Environment variables only | `ARM_*` env vars without provider block config                                                    |
+| Method                      | Config / Env vars                                                                                              |
+| --------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| DefaultAzureCredential flow | Azure CLI / Azure Developer CLI / Azure PowerShell / managed identity / workload identity / `AZURE_*` env vars |
+| Service Principal (secret)  | `client_id`, `client_secret`, `tenant_id` / `ARM_CLIENT_ID`, `ARM_CLIENT_SECRET`, `ARM_TENANT_ID`              |
+| Subscription selection      | `subscription_id` / `ARM_SUBSCRIPTION_ID` / `AZURE_SUBSCRIPTION_ID`                                            |
 
 For Azure DevOps actions, additional auth methods are supported at the **action level**:
 
-| Method                                             | Action attribute                    |
-| -------------------------------------------------- | ----------------------------------- |
-| Personal Access Token (PAT)                        | `personal_access_token` (sensitive) |
-| Service Principal (reuses provider SP credentials) | `auth_method = "service_principal"` |
+| Method                                   | Action attribute                                                                   |
+| ---------------------------------------- | ---------------------------------------------------------------------------------- |
+| Personal Access Token (PAT)              | `personal_access_token` (sensitive)                                                |
+| DefaultAzureCredential-backed Entra auth | `auth_method = "default_azure_credential"` (`service_principal` retained as alias) |
 
 ## Key Dependencies
 

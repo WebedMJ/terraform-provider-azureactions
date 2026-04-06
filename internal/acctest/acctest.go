@@ -9,6 +9,7 @@ import (
 	"fmt"
 	"os"
 	"strconv"
+	"strings"
 	"testing"
 
 	providerpkg "github.com/WebedMJ/terraform-provider-azureactions/internal/provider"
@@ -35,12 +36,9 @@ func RequireEnv(t *testing.T, keys ...string) {
 // PreCheckCommon validates required Azure credentials.
 func PreCheckCommon(t *testing.T) {
 	t.Helper()
-	RequireEnv(t,
-		"ARM_SUBSCRIPTION_ID",
-		"ARM_CLIENT_ID",
-		"ARM_CLIENT_SECRET",
-		"ARM_TENANT_ID",
-	)
+	if subscriptionID() == "" {
+		t.Fatal("AZURE_SUBSCRIPTION_ID or ARM_SUBSCRIPTION_ID must be set for acceptance tests")
+	}
 }
 
 // PreCheckAutomation validates environment variables for automation acceptance tests.
@@ -55,14 +53,14 @@ func PreCheckAutomation(t *testing.T) {
 }
 
 // PreCheckDevOps validates environment variables for devops acceptance tests.
+// Note: subscription_id is not required for DevOps actions; both PAT and
+// DefaultAzureCredential auth operate independently of Azure subscription context.
 func PreCheckDevOps(t *testing.T) {
 	t.Helper()
-	PreCheckCommon(t)
 	RequireEnv(t,
 		"AZUREDEVOPS_ORG_URL",
 		"AZUREDEVOPS_PROJECT",
 		"AZUREDEVOPS_PIPELINE_ID",
-		"AZUREDEVOPS_PAT",
 	)
 }
 
@@ -81,21 +79,37 @@ func Q(value string) string {
 	return strconv.Quote(value)
 }
 
-// ProviderConfigFromEnv returns a provider block wired from ARM_* environment variables.
+// ProviderConfigFromEnv returns a provider block wired from canonical AZURE_* environment
+// variables (with ARM_* aliases supported by provider resolution).
+// subscription_id is omitted when not set, which is valid for DevOps PAT-only usage.
 func ProviderConfigFromEnv(t *testing.T) string {
 	t.Helper()
 
-	return fmt.Sprintf(`
-provider "azureactions" {
-  subscription_id = %s
-  client_id       = %s
-  client_secret   = %s
-  tenant_id       = %s
+	subID := subscriptionID()
+	env := strings.TrimSpace(firstEnv("ARM_ENVIRONMENT", "AZURE_ENVIRONMENT"))
+
+	if subID != "" && env != "" {
+		return fmt.Sprintf("provider \"azureactions\" {\n  subscription_id = %s\n  environment     = %s\n}\n", Q(subID), Q(env))
+	}
+	if subID != "" {
+		return fmt.Sprintf("provider \"azureactions\" {\n  subscription_id = %s\n}\n", Q(subID))
+	}
+	if env != "" {
+		return fmt.Sprintf("provider \"azureactions\" {\n  environment = %s\n}\n", Q(env))
+	}
+	return "provider \"azureactions\" {}\n"
 }
-`,
-		Q(Env(t, "ARM_SUBSCRIPTION_ID")),
-		Q(Env(t, "ARM_CLIENT_ID")),
-		Q(Env(t, "ARM_CLIENT_SECRET")),
-		Q(Env(t, "ARM_TENANT_ID")),
-	)
+
+func firstEnv(keys ...string) string {
+	for _, key := range keys {
+		if value := strings.TrimSpace(os.Getenv(key)); value != "" {
+			return value
+		}
+	}
+
+	return ""
+}
+
+func subscriptionID() string {
+	return firstEnv("AZURE_SUBSCRIPTION_ID", "ARM_SUBSCRIPTION_ID")
 }

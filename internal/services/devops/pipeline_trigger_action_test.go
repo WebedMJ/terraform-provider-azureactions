@@ -310,6 +310,27 @@ func TestPipelineTriggerAction_Invoke_ServicePrincipal_Success(t *testing.T) {
 	}
 }
 
+// TestPipelineTriggerAction_Invoke_DefaultAzureCredential_Success tests triggering
+// a pipeline using the DefaultAzureCredential-backed auth alias.
+func TestPipelineTriggerAction_Invoke_DefaultAzureCredential_Success(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(newPipelineMux("completed", "succeeded"))
+	defer server.Close()
+
+	a := newTestAction(server)
+	cfg := buildDevOpsConfig(t,
+		"https://dev.azure.com/myorg", "my-project", 1,
+		authMethodDAC, "", "",
+		nil, nil,
+	)
+	resp, _ := invokeDevOpsAction(t, a, cfg)
+
+	if resp.Diagnostics.HasError() {
+		t.Errorf("expected no diagnostics, got: %v", resp.Diagnostics)
+	}
+}
+
 // TestPipelineTriggerAction_Invoke_WaitForCompletion_Succeeded tests that
 // wait_for_completion works when the run succeeds.
 func TestPipelineTriggerAction_Invoke_WaitForCompletion_Succeeded(t *testing.T) {

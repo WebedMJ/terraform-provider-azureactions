@@ -17,7 +17,7 @@ Triggers an Azure DevOps pipeline run. Supports Personal Access Token (PAT) and 
 
 ### Required
 
-- `auth_method` (String) Authentication method to use. Accepted values: `pat` (Personal Access Token) or `service_principal` (Azure AD service principal – reuses the provider-level credentials).
+- `auth_method` (String) Authentication method to use. Accepted values: `pat` (Personal Access Token) or `default_azure_credential` (reuses the provider-level Azure credential chain). `service_principal` is retained as a backwards-compatible alias for `default_azure_credential`.
 - `organization_url` (String) The URL of the Azure DevOps organisation, e.g. https://dev.azure.com/myorg.
 - `pipeline_id` (Number) The integer ID of the pipeline to trigger.
 - `project` (String) The name or ID of the Azure DevOps project.

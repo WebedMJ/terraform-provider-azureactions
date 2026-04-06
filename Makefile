@@ -1,4 +1,4 @@
-TEST?=$$(go list ./... | grep -v 'vendor')
+TEST?=./...
 TESTTIMEOUT=180m
 
 .EXPORT_ALL_VARIABLES:
@@ -11,7 +11,7 @@ build: fmt
 
 fmt:
 	@echo "==> Fixing source code with gofmt..."
-	find . -name '*.go' | grep -v vendor | xargs gofmt -s -w
+	gofmt -s -w .
 
 fmtcheck:
 	@sh -c "'$(CURDIR)/scripts/gofmtcheck.sh'"

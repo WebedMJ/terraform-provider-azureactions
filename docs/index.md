@@ -54,8 +54,8 @@ variable "tenant_id" {
 
 ### Optional
 
-- `client_id` (String) The Client ID which should be used for authentication.
-- `client_secret` (String, Sensitive) The Client Secret which should be used for authentication.
+- `client_id` (String) Optional Client ID override. Use together with `tenant_id` and `client_secret` for explicit client-secret authentication, or prefer `AZURE_CLIENT_ID` environment configuration when using DefaultAzureCredential (`ARM_CLIENT_ID` is supported as an equivalent alias).
+- `client_secret` (String, Sensitive) Optional Client Secret override. When set, `client_id` and `tenant_id` must also be provided. Otherwise omit all three and let DefaultAzureCredential authenticate via Azure CLI, workload identity, managed identity, or environment configuration (`ARM_CLIENT_SECRET` is supported as an equivalent alias to `AZURE_CLIENT_SECRET`).
 - `environment` (String) The Cloud Environment which should be used. Possible values are public, usgovernment, and china. Defaults to public.
-- `subscription_id` (String) The Azure Subscription ID which should be used.
-- `tenant_id` (String) The Tenant ID which should be used for authentication.
+- `subscription_id` (String) The Azure Subscription ID to use. This is required for resource identification and can also be supplied via `AZURE_SUBSCRIPTION_ID` (with `ARM_SUBSCRIPTION_ID` supported as an equivalent alias).
+- `tenant_id` (String) Optional Tenant ID override. This can also guide DefaultAzureCredential and may be supplied via `AZURE_TENANT_ID` (`ARM_TENANT_ID` is supported as an equivalent alias).

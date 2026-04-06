@@ -83,6 +83,14 @@ func (r *RunbookTriggerAction) Invoke(ctx context.Context, request action.Invoke
 		return
 	}
 
+	// Subscription ID is required for all ARM-based automation operations.
+	if r.SubscriptionID == "" {
+		sdk.SetResponseErrorDiagnostic(response, "Missing Subscription ID",
+			"subscription_id must be configured when using automation actions. "+
+				"Set it via the provider block, AZURE_SUBSCRIPTION_ID, or ARM_SUBSCRIPTION_ID.")
+		return
+	}
+
 	// Create automation client
 	automationClient, err := job.NewJobClientWithBaseURI(r.Client.Environment.ResourceManager)
 	if err != nil {
@@ -155,6 +163,12 @@ func (r *RunbookTriggerAction) Invoke(ctx context.Context, request action.Invoke
 		timeoutMinutes := int64(30) // default timeout
 		if !model.TimeoutMinutes.IsNull() && !model.TimeoutMinutes.IsUnknown() {
 			timeoutMinutes = model.TimeoutMinutes.ValueInt64()
+		}
+
+		if timeoutMinutes < 1 {
+			sdk.SetResponseErrorDiagnostic(response, "invalid timeout_minutes",
+				fmt.Errorf("timeout_minutes must be at least 1, got %d", timeoutMinutes))
+			return
 		}
 
 		timeout := time.Duration(timeoutMinutes) * time.Minute
