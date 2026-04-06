@@ -16,6 +16,10 @@ fmt:
 fmtcheck:
 	@sh -c "'$(CURDIR)/scripts/gofmtcheck.sh'"
 
+generate:
+	@echo "==> Generating documentation..."
+	go generate ./tools
+
 test: fmtcheck
 	go test $(TEST) -v $(TESTARGS) -timeout $(TESTTIMEOUT)
 
@@ -34,4 +38,4 @@ tidy:
 	@echo "==> Tidying go mod..."
 	@go mod tidy
 
-.PHONY: build test testacc vet fmt fmtcheck deps tidy
+.PHONY: build test testacc vet fmt fmtcheck deps tidy generate

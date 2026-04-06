@@ -245,9 +245,20 @@ go test ./internal/services/devops/... -v
 
 ### Running Acceptance Tests (requires real Azure credentials)
 
-> **Note:** Acceptance tests are not yet implemented. The `make testacc` target and `TF_ACC`-tagged test files are placeholders for future end-to-end tests that make real API calls to Azure.
+Acceptance tests validate the provider against real Azure resources and require valid credentials and Azure/DevOps resources to be set up.
 
-When acceptance tests are added, they will require the following environment variables:
+Required environment variables for all acceptance tests:
+
+```bash
+export ARM_SUBSCRIPTION_ID="your-subscription-id"
+export ARM_CLIENT_ID="your-service-principal-client-id"
+export ARM_CLIENT_SECRET="your-service-principal-client-secret"
+export ARM_TENANT_ID="your-azure-tenant-id"
+```
+
+#### Azure Automation Runbook Trigger Tests
+
+Requests the above Azure credentials. The test will create temporary resources:
 
 ```bash
 export ARM_SUBSCRIPTION_ID="your-subscription-id"
@@ -255,7 +266,34 @@ export ARM_CLIENT_ID="your-client-id"
 export ARM_CLIENT_SECRET="your-client-secret"
 export ARM_TENANT_ID="your-tenant-id"
 
-# Run acceptance tests (once implemented)
+# Run Automation action acceptance tests
+TF_ACC=1 go test ./internal/services/automation/... -v
+```
+
+#### Azure DevOps Pipeline Trigger Tests
+
+Requests both Azure and Azure DevOps credentials:
+
+```bash
+# Azure credentials (as above)
+export ARM_SUBSCRIPTION_ID="your-subscription-id"
+export ARM_CLIENT_ID="your-client-id"
+export ARM_CLIENT_SECRET="your-client-secret"
+export ARM_TENANT_ID="your-tenant-id"
+
+# Azure DevOps credentials
+export AZUREDEVOPS_ORG_URL="https://dev.azure.com/your-organization"
+export AZUREDEVOPS_PROJECT="your-project-name"
+export AZUREDEVOPS_PIPELINE_ID="your-pipeline-id"
+export AZUREDEVOPS_PAT="your-personal-access-token"  # Must have Build (Read & execute) permission
+
+# Run DevOps action acceptance tests
+TF_ACC=1 go test ./internal/services/devops/... -v
+```
+
+Alternatively, run all acceptance tests:
+
+```bash
 make testacc
 ```
 
@@ -280,6 +318,16 @@ make build
 ```bash
 make fmt
 ```
+
+### Generating Documentation
+
+Documentation is generated from schema and example HCL files using `tfplugindocs`:
+
+```bash
+make generate
+```
+
+Generated documentation will be placed in the `docs/` directory and can be published to the Terraform Registry.
 
 ## Contributing
 

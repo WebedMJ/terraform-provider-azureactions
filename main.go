@@ -9,8 +9,11 @@ import (
 	"log"
 
 	"github.com/WebedMJ/terraform-provider-azureactions/internal/provider"
-	"github.com/hashicorp/terraform-plugin-go/tfprotov5"
-	"github.com/hashicorp/terraform-plugin-go/tfprotov5/tf5server"
+	"github.com/hashicorp/terraform-plugin-framework/providerserver"
+)
+
+var (
+	version string = "dev"
 )
 
 func main() {
@@ -19,23 +22,16 @@ func main() {
 	// remove date and time stamp from log output as the plugin SDK already adds its own
 	log.SetFlags(log.Flags() &^ (log.Ldate | log.Ltime))
 
-	flag.BoolVar(&debugMode, "debuggable", false, "set to true to run the provider with support for debuggers like delve")
+	flag.BoolVar(&debugMode, "debug", false, "set to true to run the provider with support for debuggers like delve")
 	flag.Parse()
 
-	var serveOpts []tf5server.ServeOpt
-
-	if debugMode {
-		serveOpts = append(serveOpts, tf5server.WithManagedDebug())
+	opts := providerserver.ServeOpts{
+		Address: "registry.terraform.io/WebedMJ/azureactions",
+		Debug:   debugMode,
 	}
 
-	err := tf5server.Serve("registry.terraform.io/WebedMJ/azureactions", func() tfprotov5.ProviderServer {
-		providerServer, err := provider.NewFrameworkV5Provider(context.Background())
-		if err != nil {
-			log.Fatalf("creating Azure Actions Provider Server: %+v", err)
-		}
-		return providerServer
-	}, serveOpts...)
+	err := providerserver.Serve(context.Background(), provider.New(version), opts)
 	if err != nil {
-		log.Fatal(err)
+		log.Fatal(err.Error())
 	}
 }

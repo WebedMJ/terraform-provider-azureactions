@@ -105,57 +105,57 @@ func (p *PipelineTriggerAction) Metadata(_ context.Context, _ action.MetadataReq
 // Schema defines the configuration attributes for the action.
 func (p *PipelineTriggerAction) Schema(_ context.Context, _ action.SchemaRequest, response *action.SchemaResponse) {
 	response.Schema = schema.Schema{
-		Description: "Triggers an Azure DevOps pipeline run. Supports Personal Access Token (PAT) " +
+		MarkdownDescription: "Triggers an Azure DevOps pipeline run. Supports Personal Access Token (PAT) " +
 			"and service principal (Azure AD) authentication methods.",
 		Attributes: map[string]schema.Attribute{
 			"organization_url": schema.StringAttribute{
-				Required:    true,
-				Description: "The URL of the Azure DevOps organisation, e.g. https://dev.azure.com/myorg.",
+				Required:            true,
+				MarkdownDescription: "The URL of the Azure DevOps organisation, e.g. https://dev.azure.com/myorg.",
 			},
 			"project": schema.StringAttribute{
-				Required:    true,
-				Description: "The name or ID of the Azure DevOps project.",
+				Required:            true,
+				MarkdownDescription: "The name or ID of the Azure DevOps project.",
 			},
 			"pipeline_id": schema.Int64Attribute{
-				Required:    true,
-				Description: "The integer ID of the pipeline to trigger.",
+				Required:            true,
+				MarkdownDescription: "The integer ID of the pipeline to trigger.",
 			},
 			"auth_method": schema.StringAttribute{
 				Required: true,
-				Description: "Authentication method to use. Accepted values: " +
-					"\"pat\" (Personal Access Token) or \"service_principal\" (Azure AD service principal – reuses the provider-level credentials).",
+				MarkdownDescription: "Authentication method to use. Accepted values: " +
+					"`pat` (Personal Access Token) or `service_principal` (Azure AD service principal – reuses the provider-level credentials).",
 			},
 			"personal_access_token": schema.StringAttribute{
 				Optional: true,
-				Description: "Personal Access Token (PAT) used when auth_method is \"pat\". Must have Build (Read & execute) permission. " +
-					"Provide this value via a Terraform sensitive variable or the TF_VAR_ environment variable to avoid it appearing in plan output.",
+				MarkdownDescription: "Personal Access Token (PAT) used when auth_method is `pat`. Must have Build (Read & execute) permission. " +
+					"Provide this value via a Terraform sensitive variable or the `TF_VAR_` environment variable to avoid it appearing in plan output.",
 			},
 			"branch_ref": schema.StringAttribute{
-				Optional:    true,
-				Description: "Git ref to run the pipeline against, e.g. refs/heads/main. When omitted the pipeline's default branch is used.",
+				Optional:            true,
+				MarkdownDescription: "Git ref to run the pipeline against, e.g. `refs/heads/main`. When omitted the pipeline's default branch is used.",
 			},
 			"variables": schema.MapAttribute{
-				Optional:    true,
-				ElementType: types.StringType,
-				Description: "Pipeline variable overrides. Keys are variable names, values are variable values.",
+				Optional:            true,
+				ElementType:         types.StringType,
+				MarkdownDescription: "Pipeline variable overrides. Keys are variable names, values are variable values.",
 			},
 			"template_parameters": schema.MapAttribute{
-				Optional:    true,
-				ElementType: types.StringType,
-				Description: "Template parameter values. Keys are parameter names, values are parameter values.",
+				Optional:            true,
+				ElementType:         types.StringType,
+				MarkdownDescription: "Template parameter values. Keys are parameter names, values are parameter values.",
 			},
 			"stages_to_skip": schema.ListAttribute{
-				Optional:    true,
-				ElementType: types.StringType,
-				Description: "List of stage names to skip in the pipeline run.",
+				Optional:            true,
+				ElementType:         types.StringType,
+				MarkdownDescription: "List of stage names to skip in the pipeline run.",
 			},
 			"wait_for_completion": schema.BoolAttribute{
-				Optional:    true,
-				Description: "Whether to wait for the pipeline run to reach a terminal state before returning. Defaults to false.",
+				Optional:            true,
+				MarkdownDescription: "Whether to wait for the pipeline run to reach a terminal state before returning. Defaults to false.",
 			},
 			"timeout_minutes": schema.Int64Attribute{
-				Optional:    true,
-				Description: "Maximum time in minutes to wait for pipeline completion. Only used when wait_for_completion is true. Defaults to 30.",
+				Optional:            true,
+				MarkdownDescription: "Maximum time in minutes to wait for pipeline completion. Only used when wait_for_completion is true. Defaults to 30.",
 			},
 		},
 	}

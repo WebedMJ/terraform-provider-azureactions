@@ -16,13 +16,13 @@ import (
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/provider"
 	"github.com/hashicorp/terraform-plugin-framework/provider/schema"
-	"github.com/hashicorp/terraform-plugin-framework/providerserver"
 	"github.com/hashicorp/terraform-plugin-framework/resource"
 	"github.com/hashicorp/terraform-plugin-framework/types"
-	"github.com/hashicorp/terraform-plugin-go/tfprotov5"
 )
 
-type azureActionsProvider struct{}
+type azureActionsProvider struct {
+	version string
+}
 
 var (
 	_ provider.Provider            = &azureActionsProvider{}
@@ -37,42 +37,43 @@ type azureActionsProviderModel struct {
 	Environment    types.String `tfsdk:"environment"`
 }
 
-func NewFrameworkV5Provider(_ context.Context) (tfprotov5.ProviderServer, error) {
-	return providerserver.NewProtocol5(New())(), nil
-}
-
-func New() provider.Provider {
-	return &azureActionsProvider{}
+func New(version string) func() provider.Provider {
+	return func() provider.Provider {
+		return &azureActionsProvider{
+			version: version,
+		}
+	}
 }
 
 func (p *azureActionsProvider) Metadata(_ context.Context, _ provider.MetadataRequest, response *provider.MetadataResponse) {
 	response.TypeName = "azureactions"
+	response.Version = p.version
 }
 
 func (p *azureActionsProvider) Schema(_ context.Context, _ provider.SchemaRequest, response *provider.SchemaResponse) {
 	response.Schema = schema.Schema{
-		Description: "The Azure Actions provider enables Terraform actions for Azure resources using the new actions capability in Terraform 1.14.",
+		MarkdownDescription: "The Azure Actions provider enables Terraform actions for Azure resources using the new actions capability in Terraform 1.14.",
 		Attributes: map[string]schema.Attribute{
 			"subscription_id": schema.StringAttribute{
-				Optional:    true,
-				Description: "The Azure Subscription ID which should be used.",
+				Optional:            true,
+				MarkdownDescription: "The Azure Subscription ID which should be used.",
 			},
 			"client_id": schema.StringAttribute{
-				Optional:    true,
-				Description: "The Client ID which should be used for authentication.",
+				Optional:            true,
+				MarkdownDescription: "The Client ID which should be used for authentication.",
 			},
 			"client_secret": schema.StringAttribute{
-				Optional:    true,
-				Sensitive:   true,
-				Description: "The Client Secret which should be used for authentication.",
+				Optional:            true,
+				Sensitive:           true,
+				MarkdownDescription: "The Client Secret which should be used for authentication.",
 			},
 			"tenant_id": schema.StringAttribute{
-				Optional:    true,
-				Description: "The Tenant ID which should be used for authentication.",
+				Optional:            true,
+				MarkdownDescription: "The Tenant ID which should be used for authentication.",
 			},
 			"environment": schema.StringAttribute{
-				Optional:    true,
-				Description: "The Cloud Environment which should be used. Possible values are public, usgovernment, and china. Defaults to public.",
+				Optional:            true,
+				MarkdownDescription: "The Cloud Environment which should be used. Possible values are public, usgovernment, and china. Defaults to public.",
 			},
 		},
 	}
