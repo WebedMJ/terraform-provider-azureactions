@@ -4,4 +4,4 @@
 package tools
 
 // Run from repository root: go generate ./tools
-//go:generate go run github.com/hashicorp/terraform-plugin-docs/cmd/tfplugindocs generate --provider-dir .. --provider-name azureactions
+//go:generate go tool tfplugindocs generate --provider-dir .. --provider-name azureactions

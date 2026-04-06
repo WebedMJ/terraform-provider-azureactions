@@ -5,7 +5,6 @@ go 1.25.5
 require (
 	github.com/hashicorp/go-azure-sdk/resource-manager v0.20260330.1214357
 	github.com/hashicorp/go-azure-sdk/sdk v0.20260330.1214357
-	github.com/hashicorp/terraform-plugin-docs v0.24.0
 	github.com/hashicorp/terraform-plugin-framework v1.19.0
 	github.com/hashicorp/terraform-plugin-go v0.31.0
 	github.com/hashicorp/terraform-plugin-testing v1.14.1
@@ -46,6 +45,7 @@ require (
 	github.com/hashicorp/logutils v1.0.0 // indirect
 	github.com/hashicorp/terraform-exec v0.25.0 // indirect
 	github.com/hashicorp/terraform-json v0.27.2 // indirect
+	github.com/hashicorp/terraform-plugin-docs v0.24.0 // indirect
 	github.com/hashicorp/terraform-plugin-log v0.10.0 // indirect
 	github.com/hashicorp/terraform-plugin-sdk/v2 v2.38.2 // indirect
 	github.com/hashicorp/terraform-registry-address v0.4.0 // indirect
@@ -88,3 +88,5 @@ require (
 	gopkg.in/yaml.v3 v3.0.1 // indirect
 	software.sslmate.com/src/go-pkcs12 v0.7.0 // indirect
 )
+
+tool github.com/hashicorp/terraform-plugin-docs/cmd/tfplugindocs
