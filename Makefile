@@ -24,7 +24,7 @@ test: fmtcheck
 	go test $(TEST) -v $(TESTARGS) -timeout $(TESTTIMEOUT)
 
 testacc: fmtcheck
-	TF_ACC=1 go test $(TEST) -v $(TESTARGS) -timeout $(TESTTIMEOUT)
+	TF_ACC=1 go test -tags=acceptance $(TEST) -v $(TESTARGS) -timeout $(TESTTIMEOUT)
 
 vet:
 	@echo "==> Running go vet..."

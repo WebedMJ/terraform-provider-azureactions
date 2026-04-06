@@ -1,11 +1,19 @@
+//go:build acceptance
+
 // Copyright (c) WebedMJ
 // SPDX-License-Identifier: MPL-2.0
 
-package devops
+package devops_test
 
 import (
+	"fmt"
 	"os"
+	"regexp"
+	"strconv"
 	"testing"
+
+	"github.com/WebedMJ/terraform-provider-azureactions/internal/acctest"
+	"github.com/hashicorp/terraform-plugin-testing/helper/resource"
 )
 
 // TestAccPipelineTriggerAction_Basic is a placeholder acceptance test.
@@ -24,17 +32,98 @@ import (
 //	AZUREDEVOPS_PIPELINE_ID
 //	AZUREDEVOPS_PAT (Personal Access Token with Build permission)
 func TestAccPipelineTriggerAction_Basic(t *testing.T) {
-	// Skip if not running acceptance tests
 	if os.Getenv("TF_ACC") == "" {
 		t.Skip("Skipping acceptance test; set TF_ACC=1 to run")
 	}
 
-	// Acceptance tests are placeholder. Full implementation requires:
-	// 1. Real Azure subscription with service principal credentials
-	// 2. Real Azure DevOps organization, project, and pipeline
-	// 3. Valid Personal Access Token with Build (Read & execute) permission
-	//
-	// This test will be expanded when DevOps infrastructure is available for testing
-	t.Skip("Acceptance tests not yet fully implemented - requires Azure DevOps infrastructure")
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { acctest.PreCheckDevOps(t) },
+		ProtoV6ProviderFactories: acctest.ProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccPipelineTriggerConfigPAT(t, "v1", true, acctest.Env(t, "AZUREDEVOPS_PIPELINE_ID")),
+			},
+			{
+				Config: testAccPipelineTriggerConfigPAT(t, "v2", true, acctest.Env(t, "AZUREDEVOPS_PIPELINE_ID")),
+			},
+		},
+	})
 }
 
+func TestAccPipelineTriggerAction_InvalidPipelineID(t *testing.T) {
+	if os.Getenv("TF_ACC") == "" {
+		t.Skip("Skipping acceptance test; set TF_ACC=1 to run")
+	}
+
+	resource.Test(t, resource.TestCase{
+		PreCheck:                 func() { acctest.PreCheckDevOps(t) },
+		ProtoV6ProviderFactories: acctest.ProtoV6ProviderFactories,
+		Steps: []resource.TestStep{
+			{
+				Config: testAccPipelineTriggerConfigPAT(t, "v1", false, acctest.Env(t, "AZUREDEVOPS_PIPELINE_ID")),
+			},
+			{
+				Config:      testAccPipelineTriggerConfigPAT(t, "v2", false, "-1"),
+				ExpectError: regexp.MustCompile("(?i)pipeline_id must be greater than 0"),
+			},
+		},
+	})
+}
+
+func testAccPipelineTriggerConfigPAT(t *testing.T, triggerValue string, waitForCompletion bool, pipelineID string) string {
+	t.Helper()
+
+	parsedPipelineID, err := strconv.ParseInt(pipelineID, 10, 64)
+	if err != nil {
+		t.Fatalf("AZUREDEVOPS_PIPELINE_ID must be a valid integer, got %q: %v", pipelineID, err)
+	}
+
+	return fmt.Sprintf(`
+terraform {
+  required_providers {
+    azureactions = {
+      source = "WebedMJ/azureactions"
+    }
+  }
+}
+
+%s
+
+action "azureactions_devops_pipeline_trigger" "acc" {
+  config {
+    organization_url      = %s
+    project               = %s
+    pipeline_id           = %d
+    auth_method           = "pat"
+    personal_access_token = %s
+    branch_ref            = "refs/heads/main"
+    variables = {
+      AccTestSource = "terraform-provider-azureactions"
+      TriggerValue  = %s
+    }
+    wait_for_completion = %t
+    timeout_minutes     = 30
+  }
+}
+
+resource "terraform_data" "trigger" {
+  input = %s
+
+  lifecycle {
+    action_trigger {
+      events  = [after_update]
+      actions = [action.azureactions_devops_pipeline_trigger.acc]
+    }
+  }
+}
+`,
+		acctest.ProviderConfigFromEnv(t),
+		acctest.Q(acctest.Env(t, "AZUREDEVOPS_ORG_URL")),
+		acctest.Q(acctest.Env(t, "AZUREDEVOPS_PROJECT")),
+		parsedPipelineID,
+		acctest.Q(acctest.Env(t, "AZUREDEVOPS_PAT")),
+		acctest.Q(triggerValue),
+		waitForCompletion,
+		acctest.Q(triggerValue),
+	)
+}

@@ -70,10 +70,12 @@ This provider has been successfully aligned with HashiCorp's [Terraform Provider
 
 - **File Created**: `tools/tools.go` (NEW)
 - **Contents**: Go build directive for tfplugindocs code generation
+
   ```go
   //go:build tools
   import _ "github.com/hashicorp/terraform-plugin-docs/cmd/tfplugindocs"
   ```
+
 - **Usage**: Enables `go generate ./tools` for documentation generation
 
 ### 8. ✅ Example Directory Structure
@@ -106,7 +108,7 @@ This provider has been successfully aligned with HashiCorp's [Terraform Provider
 
 ### Unit Tests: ✅ ALL PASS
 
-```
+```sh
 Automation Service:
   - TestRunbookTriggerAction_Schema ................... PASS
   - TestRunbookTriggerAction_Metadata ................. PASS

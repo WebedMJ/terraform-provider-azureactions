@@ -243,55 +243,111 @@ go test ./internal/services/automation/... -v
 go test ./internal/services/devops/... -v
 ```
 
-### Running Acceptance Tests (requires real Azure credentials)
+### Running Acceptance Tests (real infrastructure required)
 
-Acceptance tests validate the provider against real Azure resources and require valid credentials and Azure/DevOps resources to be set up.
+Acceptance tests execute real Azure Automation and Azure DevOps operations. They are build-tagged and run only when both `TF_ACC=1` and the `acceptance` build tag are provided.
 
-Required environment variables for all acceptance tests:
+#### Definitive Infrastructure Requirements
+
+You must provision these resources before running acceptance tests.
+
+##### Shared Azure Foundation
+
+1. Azure subscription dedicated for test execution.
+2. Service principal with access to test resources.
+3. Resource group for acceptance tests.
+
+Recommended minimum access for the service principal:
+
+1. `Contributor` on the acceptance-test resource group.
+2. Ability to read and invoke Automation jobs in the Automation Account used for tests.
+
+##### Azure Automation Infrastructure
+
+1. Existing Automation Account in the test resource group.
+2. Existing published runbook with name used by tests (`ACC_TEST_RUNBOOK_NAME`).
+3. Runbook should be deterministic and complete quickly.
+4. Runbook should accept string parameters (tests send `Source`, `Trigger`, and `TestType`).
+
+##### Azure DevOps Infrastructure
+
+1. Existing Azure DevOps organization.
+2. Existing project.
+3. Existing pipeline with a stable numeric pipeline ID.
+4. PAT with at least Build `Read & execute` permission for that project/pipeline.
+5. Pipeline should run non-interactively (no manual approvals/gates for test path).
+
+#### Required Environment Variables (full list)
+
+All acceptance test runs require these variables.
+
+| Variable                      | Required For         | Example Value                          |
+| ----------------------------- | -------------------- | -------------------------------------- |
+| `ARM_SUBSCRIPTION_ID`         | all acceptance tests | `11111111-2222-3333-4444-555555555555` |
+| `ARM_CLIENT_ID`               | all acceptance tests | `aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee` |
+| `ARM_CLIENT_SECRET`           | all acceptance tests | `super-secret-sp-password`             |
+| `ARM_TENANT_ID`               | all acceptance tests | `99999999-8888-7777-6666-555555555555` |
+| `ACC_TEST_RG`                 | automation tests     | `rg-azureactions-acc-eastus`           |
+| `ACC_TEST_AUTOMATION_ACCOUNT` | automation tests     | `aa-azureactions-acc`                  |
+| `ACC_TEST_RUNBOOK_NAME`       | automation tests     | `Run-AccTest-NoOp`                     |
+| `AZUREDEVOPS_ORG_URL`         | devops tests         | `https://dev.azure.com/contoso`        |
+| `AZUREDEVOPS_PROJECT`         | devops tests         | `platform-shared`                      |
+| `AZUREDEVOPS_PIPELINE_ID`     | devops tests         | `42`                                   |
+| `AZUREDEVOPS_PAT`             | devops tests         | `azdovpat_example_token_value`         |
+
+#### Example Environment Setup
+
+Linux/macOS (bash):
 
 ```bash
-export ARM_SUBSCRIPTION_ID="your-subscription-id"
-export ARM_CLIENT_ID="your-service-principal-client-id"
-export ARM_CLIENT_SECRET="your-service-principal-client-secret"
-export ARM_TENANT_ID="your-azure-tenant-id"
+export ARM_SUBSCRIPTION_ID="11111111-2222-3333-4444-555555555555"
+export ARM_CLIENT_ID="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+export ARM_CLIENT_SECRET="super-secret-sp-password"
+export ARM_TENANT_ID="99999999-8888-7777-6666-555555555555"
+
+export ACC_TEST_RG="rg-azureactions-acc-eastus"
+export ACC_TEST_AUTOMATION_ACCOUNT="aa-azureactions-acc"
+export ACC_TEST_RUNBOOK_NAME="Run-AccTest-NoOp"
+
+export AZUREDEVOPS_ORG_URL="https://dev.azure.com/contoso"
+export AZUREDEVOPS_PROJECT="platform-shared"
+export AZUREDEVOPS_PIPELINE_ID="42"
+export AZUREDEVOPS_PAT="azdovpat_example_token_value"
 ```
 
-#### Azure Automation Runbook Trigger Tests
+Windows PowerShell:
 
-Requests the above Azure credentials. The test will create temporary resources:
+```powershell
+$env:ARM_SUBSCRIPTION_ID = "11111111-2222-3333-4444-555555555555"
+$env:ARM_CLIENT_ID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+$env:ARM_CLIENT_SECRET = "super-secret-sp-password"
+$env:ARM_TENANT_ID = "99999999-8888-7777-6666-555555555555"
+
+$env:ACC_TEST_RG = "rg-azureactions-acc-eastus"
+$env:ACC_TEST_AUTOMATION_ACCOUNT = "aa-azureactions-acc"
+$env:ACC_TEST_RUNBOOK_NAME = "Run-AccTest-NoOp"
+
+$env:AZUREDEVOPS_ORG_URL = "https://dev.azure.com/contoso"
+$env:AZUREDEVOPS_PROJECT = "platform-shared"
+$env:AZUREDEVOPS_PIPELINE_ID = "42"
+$env:AZUREDEVOPS_PAT = "azdovpat_example_token_value"
+```
+
+#### How to Run
+
+Run only Automation acceptance tests:
 
 ```bash
-export ARM_SUBSCRIPTION_ID="your-subscription-id"
-export ARM_CLIENT_ID="your-client-id"
-export ARM_CLIENT_SECRET="your-client-secret"
-export ARM_TENANT_ID="your-tenant-id"
-
-# Run Automation action acceptance tests
-TF_ACC=1 go test ./internal/services/automation/... -v
+TF_ACC=1 go test -tags=acceptance ./internal/services/automation/... -v -timeout 30m
 ```
 
-#### Azure DevOps Pipeline Trigger Tests
-
-Requests both Azure and Azure DevOps credentials:
+Run only DevOps acceptance tests:
 
 ```bash
-# Azure credentials (as above)
-export ARM_SUBSCRIPTION_ID="your-subscription-id"
-export ARM_CLIENT_ID="your-client-id"
-export ARM_CLIENT_SECRET="your-client-secret"
-export ARM_TENANT_ID="your-tenant-id"
-
-# Azure DevOps credentials
-export AZUREDEVOPS_ORG_URL="https://dev.azure.com/your-organization"
-export AZUREDEVOPS_PROJECT="your-project-name"
-export AZUREDEVOPS_PIPELINE_ID="your-pipeline-id"
-export AZUREDEVOPS_PAT="your-personal-access-token"  # Must have Build (Read & execute) permission
-
-# Run DevOps action acceptance tests
-TF_ACC=1 go test ./internal/services/devops/... -v
+TF_ACC=1 go test -tags=acceptance ./internal/services/devops/... -v -timeout 30m
 ```
 
-Alternatively, run all acceptance tests:
+Run all acceptance tests via Makefile:
 
 ```bash
 make testacc

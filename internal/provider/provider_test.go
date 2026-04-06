@@ -1,3 +1,5 @@
+//go:build acceptance
+
 // Copyright (c) WebedMJ
 // SPDX-License-Identifier: MPL-2.0
 
