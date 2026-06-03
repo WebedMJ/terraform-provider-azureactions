@@ -9,8 +9,11 @@ import (
 	"time"
 
 	"github.com/WebedMJ/terraform-provider-azureactions/internal/sdk"
-	"github.com/hashicorp/go-azure-sdk/resource-manager/automation/2019-06-01/job"
-	"github.com/hashicorp/go-azure-sdk/resource-manager/automation/2019-06-01/runbook"
+	// Azure Automation API version 2024-10-23 provides current support for managing jobs and runbooks.
+	// Last reviewed: 2026-06-03
+	// Ref: https://learn.microsoft.com/en-us/rest/api/automation/
+	"github.com/hashicorp/go-azure-sdk/resource-manager/automation/2024-10-23/job"
+	"github.com/hashicorp/go-azure-sdk/resource-manager/automation/2024-10-23/runbook"
 	"github.com/hashicorp/terraform-plugin-framework/action"
 	"github.com/hashicorp/terraform-plugin-framework/action/schema"
 	"github.com/hashicorp/terraform-plugin-framework/types"

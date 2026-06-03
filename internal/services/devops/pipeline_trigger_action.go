@@ -10,6 +10,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -23,12 +24,18 @@ import (
 )
 
 const (
-	devOpsAPIVersion   = "7.1"
-	devOpsTokenScope   = "499b84ac-1321-427f-aa17-267ca6975798/.default"
-	authMethodPAT      = "pat"
-	authMethodSP       = "service_principal"
-	authMethodDAC      = "default_azure_credential"
-	defaultPollSeconds = 15
+	// Azure DevOps REST API version 7.1 is the current stable release.
+	// Last reviewed: 2024-12-20
+	// Ref: https://learn.microsoft.com/en-us/rest/api/azure/devops/
+	devOpsAPIVersion        = "7.1"
+	devOpsTokenScope        = "499b84ac-1321-427f-aa17-267ca6975798/.default"
+	authMethodPAT           = "pat"
+	authMethodSP            = "service_principal"
+	authMethodDAC           = "default_azure_credential"
+	defaultPollSeconds      = 15
+	httpClientTimeout       = 30 * time.Second // timeout for individual DevOps API calls
+	httpDialTimeout         = 10 * time.Second // timeout for establishing connection
+	httpTLSHandshakeTimeout = 10 * time.Second
 )
 
 // PipelineTriggerAction implements sdk.Action for triggering an Azure DevOps
@@ -121,8 +128,8 @@ func (p *PipelineTriggerAction) Schema(_ context.Context, _ action.SchemaRequest
 			},
 			"personal_access_token": schema.StringAttribute{
 				Optional: true,
-				MarkdownDescription: "Personal Access Token (PAT) used when auth_method is `pat`. Must have Build (Read & execute) permission. " +
-					"Provide this value via a Terraform sensitive variable or the `TF_VAR_` environment variable to avoid it appearing in plan output.",
+				MarkdownDescription: "Personal Access Token (PAT) used when `auth_method` is `\"pat\"`. Must have Build (Read & execute) permission. " +
+					"Provide this value via a Terraform sensitive variable or the `TF_VAR_PERSONAL_ACCESS_TOKEN` environment variable to avoid it appearing in plan output.",
 			},
 			"branch_ref": schema.StringAttribute{
 				Optional:            true,
@@ -373,11 +380,26 @@ func (p *PipelineTriggerAction) buildRequestBody(ctx context.Context, model Pipe
 
 // getHTTPClient returns the HTTP client to use for DevOps API calls.
 // Tests can inject a custom client via the httpClient field.
+// If no custom client is set, returns a default client with explicit timeouts
+// to prevent indefinite hangs on network issues.
 func (p *PipelineTriggerAction) getHTTPClient() *http.Client {
 	if p.httpClient != nil {
 		return p.httpClient
 	}
-	return http.DefaultClient
+	// Return a client with explicit timeouts to avoid hangs on network failures
+	return &http.Client{
+		Timeout: httpClientTimeout,
+		Transport: &http.Transport{
+			DialContext:         (&net.Dialer{Timeout: httpDialTimeout}).DialContext,
+			TLSHandshakeTimeout: httpTLSHandshakeTimeout,
+			MaxIdleConns:        10,
+			MaxIdleConnsPerHost: 5,
+			IdleConnTimeout:     90 * time.Second,
+			DisableKeepAlives:   false,
+			DisableCompression:  false,
+			MaxConnsPerHost:     0, // unlimited
+		},
+	}
 }
 
 // triggerPipeline sends the POST request to the Azure DevOps Pipelines API

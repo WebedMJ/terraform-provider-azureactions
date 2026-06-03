@@ -14,7 +14,13 @@ fmt:
 	gofmt -s -w .
 
 fmtcheck:
-	@sh -c "'$(CURDIR)/scripts/gofmtcheck.sh'"
+	@echo "==> Checking that code complies with gofmt requirements..."
+	@if [ -n "$$(gofmt -l .)" ]; then \
+		echo "gofmt needs running on the following files:"; \
+		gofmt -l .; \
+		echo "You can use the command: \`make fmt\` to reformat code."; \
+		exit 1; \
+	fi
 
 generate:
 	@echo "==> Generating documentation..."
