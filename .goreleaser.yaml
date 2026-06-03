@@ -1,0 +1,78 @@
+# Copyright (c) WebedMJ
+# SPDX-License-Identifier: MPL-2.0
+#
+# GoReleaser configuration for Terraform provider.
+# Builds multi-platform provider binaries and publishes to Terraform Registry.
+
+version: 2
+
+project_name: terraform-provider-azureactions
+
+before:
+  hooks:
+    - go mod download
+    - go mod tidy
+
+builds:
+  - id: terraform-provider-azureactions
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+      - windows
+    goarch:
+      - amd64
+      - arm64
+    # Only build amd64 for Windows (less common/tested for Windows ARM)
+    ignore:
+      - goos: windows
+        goarch: arm64
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+    binary: terraform-provider-azureactions_v{{.Version}}
+
+archives:
+  - format: zip
+    # Use name_template to ensure archives match Terraform provider naming scheme
+    name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+
+release:
+  # Publish to GitHub Releases in Terraform provider format
+  # Registry expects files: terraform-provider-<NAME>_<VERSION>_<OS>_<ARCH>.zip
+  github:
+    owner: WebedMJ
+    name: terraform-provider-azureactions
+
+checksum:
+  # Create SHA256SUMS file for registry verification
+  name_template: "{{ .ProjectName }}_{{ .Version }}_SHA256SUMS"
+  algorithm: sha256
+
+signs:
+  - cmd: gpg
+    args:
+      - --batch
+      - -u
+      - "{{ .Env.GPG_FINGERPRINT }}"
+      - --output
+      - $signature
+      - --detach-sign
+      - $artifact
+    artifacts: checksum
+    output: "{{ .ProjectName }}_{{ .Version }}_SHA256SUMS.sig"
+
+changelog:
+  use: github
+  groups:
+    - title: Features
+      regexp: '^.*?feat(\(.+\))?!?:.+$'
+      order: 100
+    - title: Bug fixes
+      regexp: '^.*?bug(\(.+\))?!?:.+$'
+      order: 200
+    - title: Documentation
+      regexp: '^.*?docs?(\(.+\))?!?:.+$'
+      order: 300
+    - title: Others
+      order: 999
