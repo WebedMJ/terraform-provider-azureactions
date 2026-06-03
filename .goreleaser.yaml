@@ -17,42 +17,58 @@ builds:
   - id: terraform-provider-azureactions
     env:
       - CGO_ENABLED=0
+    mod_timestamp: "{{ .CommitTimestamp }}"
+    flags:
+      - -trimpath
     goos:
+      - freebsd
       - darwin
       - linux
       - windows
     goarch:
       - amd64
+      - "386"
+      - arm
       - arm64
-    # Only build amd64 for Windows (less common/tested for Windows ARM)
     ignore:
+      - goos: darwin
+        goarch: "386"
       - goos: windows
-        goarch: arm64
+        goarch: arm
     ldflags:
       - -s -w -X main.version={{.Version}}
-    binary: terraform-provider-azureactions_v{{.Version}}
+    binary: "{{ .ProjectName }}_v{{ .Version }}"
 
 archives:
   - formats: [zip]
-    # Use name_template to ensure archives match Terraform provider naming scheme
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
 
-release:
-  # Publish to GitHub Releases in Terraform provider format
-  # Registry expects files: terraform-provider-<NAME>_<VERSION>_<OS>_<ARCH>.zip
-  github:
-    owner: WebedMJ
-    name: terraform-provider-azureactions
-
 checksum:
-  # Create SHA256SUMS file for registry verification
   name_template: "{{ .ProjectName }}_{{ .Version }}_SHA256SUMS"
   algorithm: sha256
+  extra_files:
+    - glob: terraform-registry-manifest.json
+      name_template: "{{ .ProjectName }}_{{ .Version }}_manifest.json"
 
 signs:
   - artifacts: checksum
-    args: ["--batch", "-u", "{{ .Env.GPG_FINGERPRINT }}", "--output", "${signature}", "--detach-sign", "${artifact}"]
+    args:
+      - "--batch"
+      - "--local-user"
+      - "{{ .Env.GPG_FINGERPRINT }}"
+      - "--output"
+      - "${signature}"
+      - "--detach-sign"
+      - "${artifact}"
     output: "{{ .ProjectName }}_{{ .Version }}_SHA256SUMS.sig"
+
+release:
+  github:
+    owner: WebedMJ
+    name: terraform-provider-azureactions
+  extra_files:
+    - glob: terraform-registry-manifest.json
+      name_template: "{{ .ProjectName }}_{{ .Version }}_manifest.json"
 
 changelog:
   use: github
