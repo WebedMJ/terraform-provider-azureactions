@@ -28,47 +28,78 @@ make build
 
 ## Configuration
 
-The provider uses Azure Identity / DefaultAzureCredential behavior for Azure authentication.
+### Authenticating to Azure
 
-Recommended local development flow:
+This provider supports multiple ways to authenticate to Azure.
 
-```bash
-az login
-export AZURE_SUBSCRIPTION_ID="your-subscription-id"
-```
+- DefaultAzureCredential chain (recommended in most environments)
+- Service principal with client secret (explicit credentials)
 
-Recommended CI/authenticated runtime flows:
+When running non-interactively (for example in CI), prefer workload identity federation or managed identity through the DefaultAzureCredential chain. For local development, Azure CLI sign-in is typically the simplest option.
 
-1. Workload identity / OIDC via `AZURE_*` environment variables
-2. Managed identity
-3. Azure CLI / Azure Developer CLI / Azure PowerShell developer sign-in
-4. Explicit client secret override via provider config or environment variables
+### DefaultAzureCredential chain
 
-Explicit service principal configuration remains supported as an override:
+If `client_id`, `client_secret`, and `tenant_id` are not fully set together, this provider uses Azure Identity's DefaultAzureCredential.
 
-```hcl
+Depending on environment, this can use:
+
+- Workload identity federation
+- Managed identity
+- Environment credentials (`AZURE_*`)
+- Azure CLI authentication
+- Azure Developer CLI / Azure PowerShell cached identity
+
+Example:
+
+```terraform
 provider "azureactions" {
-  subscription_id = "your-subscription-id"
-  client_id       = "your-client-id"
-  client_secret   = "your-client-secret"
-  tenant_id       = "your-tenant-id"
-  organization_url = "https://dev.azure.com/myorg" # Optional, required only for DevOps actions
-  environment     = "public" # Optional: public, usgovernment, china
+  subscription_id = var.subscription_id
+  # No explicit client credentials: DefaultAzureCredential is used
 }
 ```
 
-Environment variables supported by the provider include:
+### Service principal with client secret
 
-- `AZURE_SUBSCRIPTION_ID` (or `ARM_SUBSCRIPTION_ID` alias)
-- `AZURE_CLIENT_ID` (or `ARM_CLIENT_ID` alias)
-- `AZURE_CLIENT_SECRET` (or `ARM_CLIENT_SECRET` alias)
-- `AZURE_TENANT_ID` (or `ARM_TENANT_ID` alias)
-- `ARM_ENVIRONMENT`
-- `AZUREDEVOPS_ORG_URL` (optional, required for DevOps actions when not set in provider)
+You can authenticate explicitly with a service principal by setting all of:
 
-Precedence is consistent for all of the above: provider block value first, then `AZURE_*`, then `ARM_*` alias.
+- `client_id`
+- `client_secret`
+- `tenant_id`
 
-When no explicit client secret configuration is provided, the provider falls back to DefaultAzureCredential-compatible resolution, which allows local Azure CLI authentication and CI identity-based authentication without changing Terraform configuration.
+If `client_secret` is set but either `client_id` or `tenant_id` is missing, provider configuration fails.
+
+Example:
+
+```terraform
+provider "azureactions" {
+  subscription_id = var.subscription_id
+  client_id       = var.client_id
+  client_secret   = var.client_secret
+  tenant_id       = var.tenant_id
+}
+```
+
+### Environment variable support and precedence
+
+For provider attributes that support environment variables, values are resolved in this order:
+
+1. Value set in the provider block
+2. `AZURE_*` environment variable
+3. `ARM_*` alias (where supported)
+
+Supported variables include:
+
+- `AZURE_SUBSCRIPTION_ID` / `ARM_SUBSCRIPTION_ID`
+- `AZURE_CLIENT_ID` / `ARM_CLIENT_ID`
+- `AZURE_CLIENT_SECRET` / `ARM_CLIENT_SECRET`
+- `AZURE_TENANT_ID` / `ARM_TENANT_ID`
+- `ARM_ENVIRONMENT` (`public`, `usgovernment`, `china`)
+
+### Azure DevOps note
+
+For `azureactions_devops_pipeline_trigger`, `auth_method = "default_azure_credential"` uses Azure authentication as described above to request a Microsoft Entra token for Azure DevOps.
+
+`auth_method = "pat"` uses a Personal Access Token for Azure DevOps API calls, which is separate from Azure Resource Manager authentication.
 
 ## Usage
 
