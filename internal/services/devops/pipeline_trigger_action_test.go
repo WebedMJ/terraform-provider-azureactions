@@ -9,16 +9,20 @@ package devops
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 	"time"
 
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
 	"github.com/WebedMJ/terraform-provider-azureactions/internal/clients"
-	"github.com/hashicorp/go-azure-sdk/sdk/auth"
+	"github.com/WebedMJ/terraform-provider-azureactions/internal/sdk"
 	"github.com/hashicorp/go-azure-sdk/sdk/environments"
 	"github.com/hashicorp/terraform-plugin-framework/action"
 	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
+	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-go/tftypes"
 	"golang.org/x/oauth2"
 )
@@ -38,8 +42,27 @@ func (m *devOpsMockAuthorizer) AuxiliaryTokens(_ context.Context, _ *http.Reques
 	return nil, nil
 }
 
+type mockAzureTokenCredential struct {
+	token  string
+	scopes []string
+}
+
+func (m *mockAzureTokenCredential) GetToken(_ context.Context, opts policy.TokenRequestOptions) (azcore.AccessToken, error) {
+	m.scopes = append([]string{}, opts.Scopes...)
+	if m.token == "" {
+		return azcore.AccessToken{}, fmt.Errorf("mock token is empty")
+	}
+
+	return azcore.AccessToken{
+		Token:     m.token,
+		ExpiresOn: time.Now().Add(1 * time.Hour),
+	}, nil
+}
+
 // newDevOpsTestClient returns a *clients.Client suitable for unit tests.
 func newDevOpsTestClient() *clients.Client {
+	credential := &mockAzureTokenCredential{token: "mock-devops-credential-token"}
+
 	return &clients.Client{
 		Account: clients.Account{
 			SubscriptionID: "test-subscription-id",
@@ -59,6 +82,7 @@ func newDevOpsTestClient() *clients.Client {
 			ResourceManager: environments.ResourceManagerAPI("http://localhost"),
 		},
 		Authorizer: &devOpsMockAuthorizer{},
+		Credential: credential,
 	}
 }
 
@@ -73,9 +97,6 @@ func newTestAction(server *httptest.Server) *PipelineTriggerAction {
 			Transport: &hostRewriteTransport{host: serverHost(server.URL)},
 		},
 		pollInterval: 50 * time.Millisecond,
-		devOpsAuthorizerFactory: func(_ context.Context) (auth.Authorizer, error) {
-			return &devOpsMockAuthorizer{}, nil
-		},
 	}
 	req := action.ConfigureRequest{ProviderData: newDevOpsTestClient()}
 	resp := &action.ConfigureResponse{}
@@ -443,5 +464,36 @@ func TestPipelineTriggerAction_Invoke_PAT_Missing(t *testing.T) {
 
 	if !resp.Diagnostics.HasError() {
 		t.Error("expected diagnostics error for missing PAT, got none")
+	}
+}
+
+// TestPipelineTriggerAction_ResolveAuthHeader_UsesFixedScope verifies that
+// Azure DevOps auth always requests token using the well-known .default scope.
+func TestPipelineTriggerAction_ResolveAuthHeader_UsesFixedScope(t *testing.T) {
+	t.Parallel()
+
+	credential := &mockAzureTokenCredential{token: "fallback-devops-token"}
+	a := &PipelineTriggerAction{
+		ActionMetadata: sdk.ActionMetadata{
+			Client: &clients.Client{
+				Environment: &environments.Environment{Name: "test"},
+				Credential:  credential,
+			},
+		},
+	}
+
+	header, err := a.resolveAuthHeader(context.Background(), PipelineTriggerActionModel{
+		AuthMethod: types.StringValue(authMethodDAC),
+	})
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
+
+	if header != "Bearer fallback-devops-token" {
+		t.Fatalf("expected Bearer header with fallback token, got: %q", header)
+	}
+
+	if len(credential.scopes) != 1 || credential.scopes[0] != devOpsTokenScope {
+		t.Fatalf("expected scope %q, got: %#v", devOpsTokenScope, credential.scopes)
 	}
 }

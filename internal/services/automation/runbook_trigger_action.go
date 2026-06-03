@@ -75,6 +75,14 @@ func (r *RunbookTriggerAction) Metadata(_ context.Context, _ action.MetadataRequ
 	response.TypeName = "azureactions_automation_runbook_trigger"
 }
 
+func statusString(status *job.JobStatus) string {
+	if status == nil {
+		return "unknown"
+	}
+
+	return string(*status)
+}
+
 func (r *RunbookTriggerAction) Invoke(ctx context.Context, request action.InvokeRequest, response *action.InvokeResponse) {
 	var model RunbookTriggerActionModel
 
@@ -157,6 +165,9 @@ func (r *RunbookTriggerAction) Invoke(ctx context.Context, request action.Invoke
 	response.SendProgress(action.InvokeProgressEvent{
 		Message: fmt.Sprintf("Runbook job %s created successfully", jobName),
 	})
+	response.SendProgress(action.InvokeProgressEvent{
+		Message: fmt.Sprintf("Action result details (progress-only): job_name=%s initial_status=%s", jobName, statusString(createResp.Model.Properties.Status)),
+	})
 
 	// If wait_for_completion is true, wait for the job to complete
 	if !model.WaitForCompletion.IsNull() && model.WaitForCompletion.ValueBool() {
@@ -207,6 +218,9 @@ func (r *RunbookTriggerAction) Invoke(ctx context.Context, request action.Invoke
 						response.SendProgress(action.InvokeProgressEvent{
 							Message: fmt.Sprintf("Runbook job %s completed successfully", jobName),
 						})
+						response.SendProgress(action.InvokeProgressEvent{
+							Message: fmt.Sprintf("Action result details (progress-only): job_name=%s final_status=%s", jobName, string(status)),
+						})
 						return
 					case job.JobStatusFailed:
 						sdk.SetResponseErrorDiagnostic(response, "runbook job failed", fmt.Sprintf("job %s failed", jobName))
@@ -229,6 +243,9 @@ func (r *RunbookTriggerAction) Invoke(ctx context.Context, request action.Invoke
 	} else {
 		response.SendProgress(action.InvokeProgressEvent{
 			Message: fmt.Sprintf("Runbook %s triggered successfully. Job name: %s", model.RunbookName.ValueString(), jobName),
+		})
+		response.SendProgress(action.InvokeProgressEvent{
+			Message: fmt.Sprintf("Action result details (progress-only): job_name=%s final_status=not_waited", jobName),
 		})
 	}
 }

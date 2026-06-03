@@ -207,8 +207,8 @@ resource "azurerm_linux_virtual_machine" "app" {
 ```hcl
 # auth_method = "default_azure_credential" reuses the provider-level Azure
 # credential chain (Azure CLI locally, workload identity / managed identity /
-# environment credentials in CI/runtime) to obtain an Azure AD token scoped to
-# Azure DevOps automatically.
+# environment credentials in CI/runtime) to obtain an Azure AD token for
+# Azure DevOps using scope 499b84ac-1321-427f-aa17-267ca6975798/.default.
 action "azureactions_devops_pipeline_trigger" "deploy_dac" {
   config {
     organization_url = "https://dev.azure.com/myorg"
@@ -223,6 +223,15 @@ action "azureactions_devops_pipeline_trigger" "deploy_dac" {
   }
 }
 ```
+
+### Action Result Behavior
+
+Terraform actions in the current Terraform/plugin framework model do not expose provider-defined expression outputs (for example `run_id`, `state`, or `result`) that can be referenced from `output`, `local`, or other expression contexts.
+
+For this provider, operational result details are emitted via action progress events during `terraform apply`.
+
+- Azure DevOps pipeline trigger emits run ID and initial state.
+- When `wait_for_completion = true`, it also emits final state and result.
 
 > **Security note (DevOps PAT):** Action schema attributes in Terraform 1.14+ do not support the `sensitive` flag. Always supply `personal_access_token` via a Terraform [sensitive variable](https://developer.hashicorp.com/terraform/language/values/variables#suppressing-values-in-cli-output) (`sensitive = true`) or a `TF_VAR_` environment variable to prevent the value appearing in plan/apply output.
 

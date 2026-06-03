@@ -1,4 +1,5 @@
 terraform {
+  required_version = ">= 1.14"
   required_providers {
     azureactions = {
       source = "WebedMJ/azureactions"

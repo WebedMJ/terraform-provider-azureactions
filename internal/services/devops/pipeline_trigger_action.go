@@ -15,8 +15,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
 	"github.com/WebedMJ/terraform-provider-azureactions/internal/sdk"
-	"github.com/hashicorp/go-azure-sdk/sdk/auth"
 	"github.com/hashicorp/terraform-plugin-framework/action"
 	"github.com/hashicorp/terraform-plugin-framework/action/schema"
 	"github.com/hashicorp/terraform-plugin-framework/types"
@@ -24,6 +24,7 @@ import (
 
 const (
 	devOpsAPIVersion   = "7.1"
+	devOpsTokenScope   = "499b84ac-1321-427f-aa17-267ca6975798/.default"
 	authMethodPAT      = "pat"
 	authMethodSP       = "service_principal"
 	authMethodDAC      = "default_azure_credential"
@@ -41,9 +42,6 @@ type PipelineTriggerAction struct {
 	// pollInterval is used in tests to override the default polling interval.
 	// A zero value uses defaultPollSeconds.
 	pollInterval time.Duration
-	// devOpsAuthorizerFactory allows tests to inject a mock authorizer for SP auth.
-	// A nil value uses auth.NewAuthorizerFromCredentials with the provider credentials.
-	devOpsAuthorizerFactory func(ctx context.Context) (auth.Authorizer, error)
 }
 
 var _ sdk.Action = &PipelineTriggerAction{}
@@ -224,6 +222,9 @@ func (p *PipelineTriggerAction) Invoke(ctx context.Context, request action.Invok
 	response.SendProgress(action.InvokeProgressEvent{
 		Message: fmt.Sprintf("Pipeline run %d (%s) created with state: %s", run.ID, run.Name, run.State),
 	})
+	response.SendProgress(action.InvokeProgressEvent{
+		Message: fmt.Sprintf("Action result details (progress-only): run_id=%d initial_state=%s", run.ID, run.State),
+	})
 
 	// Optionally wait for the run to reach a terminal state
 	if !model.WaitForCompletion.IsNull() && model.WaitForCompletion.ValueBool() {
@@ -248,10 +249,15 @@ func (p *PipelineTriggerAction) Invoke(ctx context.Context, request action.Invok
 		statusURL := fmt.Sprintf("%s/%s/_apis/pipelines/%d/runs/%d?api-version=%s",
 			orgURL, project, pipelineID, run.ID, devOpsAPIVersion)
 
-		if err := p.waitForPipelineRun(waitCtx, response, statusURL, authHeader, run.ID); err != nil {
+		finalRun, err := p.waitForPipelineRun(waitCtx, response, statusURL, authHeader, run.ID)
+		if err != nil {
 			sdk.SetResponseErrorDiagnostic(response, "waiting for pipeline run", err)
 			return
 		}
+
+		response.SendProgress(action.InvokeProgressEvent{
+			Message: fmt.Sprintf("Action result details (progress-only): run_id=%d final_state=%s final_result=%s", finalRun.ID, finalRun.State, finalRun.Result),
+		})
 	} else {
 		response.SendProgress(action.InvokeProgressEvent{
 			Message: fmt.Sprintf("Pipeline run %d triggered successfully (not waiting for completion)", run.ID),
@@ -274,27 +280,21 @@ func (p *PipelineTriggerAction) resolveAuthHeader(ctx context.Context, model Pip
 		if p.Client == nil {
 			return "", fmt.Errorf("provider client is not configured; ensure the provider block is set up with valid Azure credentials")
 		}
-		// Create a dedicated authorizer scoped to Azure DevOps (not ARM).
-		// Azure DevOps requires an AAD token with audience 499b84ac-1321-427f-aa17-267ca6975798.
-		var devOpsAuth auth.Authorizer
-		if p.devOpsAuthorizerFactory != nil {
-			var err error
-			devOpsAuth, err = p.devOpsAuthorizerFactory(ctx)
-			if err != nil {
-				return "", fmt.Errorf("creating Azure DevOps authorizer: %w", err)
-			}
-		} else {
-			var err error
-			devOpsAuth, err = p.Client.AuthorizerFor(p.Client.Environment.AzureDevOps)
-			if err != nil {
-				return "", fmt.Errorf("creating Azure DevOps authorizer: %w", err)
-			}
+		if p.Client.Credential == nil {
+			return "", fmt.Errorf("provider token credential is not configured; ensure the provider has valid Azure credentials")
 		}
-		token, err := devOpsAuth.Token(ctx, nil)
+
+		// Always request Azure DevOps token using the well-known app scope.
+		token, err := p.Client.Credential.GetToken(ctx, policy.TokenRequestOptions{Scopes: []string{devOpsTokenScope}})
 		if err != nil {
-			return "", fmt.Errorf("obtaining Azure DevOps token: %w", err)
+			return "", fmt.Errorf("obtaining Azure DevOps token for scope %q: %w", devOpsTokenScope, err)
 		}
-		return fmt.Sprintf("%s %s", token.Type(), token.AccessToken), nil
+
+		if strings.TrimSpace(token.Token) == "" {
+			return "", fmt.Errorf("obtaining Azure DevOps token for scope %q returned an empty access token", devOpsTokenScope)
+		}
+
+		return fmt.Sprintf("Bearer %s", token.Token), nil
 
 	default:
 		return "", fmt.Errorf("unsupported auth_method: %q", model.AuthMethod.ValueString())
@@ -402,7 +402,7 @@ func (p *PipelineTriggerAction) triggerPipeline(ctx context.Context, url, authHe
 
 // waitForPipelineRun polls the pipeline run status URL until the run reaches a
 // terminal state (completed) or the context is cancelled.
-func (p *PipelineTriggerAction) waitForPipelineRun(ctx context.Context, response *action.InvokeResponse, statusURL, authHeader string, runID int) error {
+func (p *PipelineTriggerAction) waitForPipelineRun(ctx context.Context, response *action.InvokeResponse, statusURL, authHeader string, runID int) (*pipelineRunResponse, error) {
 	interval := p.pollInterval
 	if interval <= 0 {
 		interval = defaultPollSeconds * time.Second
@@ -413,11 +413,11 @@ func (p *PipelineTriggerAction) waitForPipelineRun(ctx context.Context, response
 	for {
 		select {
 		case <-ctx.Done():
-			return fmt.Errorf("waiting for pipeline run %d to complete: %w", runID, ctx.Err())
+			return nil, fmt.Errorf("waiting for pipeline run %d to complete: %w", runID, ctx.Err())
 		case <-ticker.C:
 			run, err := p.getPipelineRun(ctx, statusURL, authHeader)
 			if err != nil {
-				return fmt.Errorf("polling pipeline run status: %w", err)
+				return nil, fmt.Errorf("polling pipeline run status: %w", err)
 			}
 
 			response.SendProgress(action.InvokeProgressEvent{
@@ -430,13 +430,13 @@ func (p *PipelineTriggerAction) waitForPipelineRun(ctx context.Context, response
 					response.SendProgress(action.InvokeProgressEvent{
 						Message: fmt.Sprintf("Pipeline run %d completed successfully", runID),
 					})
-					return nil
+					return run, nil
 				case "failed":
-					return fmt.Errorf("pipeline run %d failed", runID)
+					return nil, fmt.Errorf("pipeline run %d failed", runID)
 				case "canceled":
-					return fmt.Errorf("pipeline run %d was canceled", runID)
+					return nil, fmt.Errorf("pipeline run %d was canceled", runID)
 				default:
-					return fmt.Errorf("pipeline run %d completed with unknown result: %s", runID, run.Result)
+					return nil, fmt.Errorf("pipeline run %d completed with unknown result: %s", runID, run.Result)
 				}
 			}
 		}
