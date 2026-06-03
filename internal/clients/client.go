@@ -24,18 +24,20 @@ type Client struct {
 }
 
 type Account struct {
-	SubscriptionID string
-	TenantID       string
-	ClientID       string
-	Environment    string
+	SubscriptionID  string
+	TenantID        string
+	ClientID        string
+	Environment     string
+	OrganizationURL string
 }
 
 type Config struct {
-	SubscriptionID string
-	TenantID       string
-	ClientID       string
-	ClientSecret   string
-	Environment    string
+	SubscriptionID  string
+	TenantID        string
+	ClientID        string
+	ClientSecret    string
+	Environment     string
+	OrganizationURL string
 }
 
 func NewClient(ctx context.Context, config Config) (*Client, error) {
@@ -57,10 +59,11 @@ func NewClient(ctx context.Context, config Config) (*Client, error) {
 
 	return &Client{
 		Account: Account{
-			SubscriptionID: config.SubscriptionID,
-			TenantID:       config.TenantID,
-			ClientID:       config.ClientID,
-			Environment:    config.Environment,
+			SubscriptionID:  config.SubscriptionID,
+			TenantID:        config.TenantID,
+			ClientID:        config.ClientID,
+			Environment:     config.Environment,
+			OrganizationURL: config.OrganizationURL,
 		},
 		Config:      config,
 		Environment: environment,

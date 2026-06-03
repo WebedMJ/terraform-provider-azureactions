@@ -23,6 +23,8 @@ type RunbookTriggerAction struct {
 	pollInterval time.Duration
 }
 
+const defaultCreateTimeout = 5 * time.Minute
+
 var _ sdk.Action = &RunbookTriggerAction{}
 
 func NewRunbookTriggerAction() action.Action {
@@ -150,8 +152,15 @@ func (r *RunbookTriggerAction) Invoke(ctx context.Context, request action.Invoke
 		Message: fmt.Sprintf("Starting runbook %s in automation account %s", model.RunbookName.ValueString(), model.AutomationAccountName.ValueString()),
 	})
 
+	createCtx := ctx
+	if _, hasDeadline := ctx.Deadline(); !hasDeadline {
+		var cancel context.CancelFunc
+		createCtx, cancel = context.WithTimeout(ctx, defaultCreateTimeout)
+		defer cancel()
+	}
+
 	// Create and start the job
-	createResp, err := automationClient.Create(ctx, jobId, createJobPayload, job.DefaultCreateOperationOptions())
+	createResp, err := automationClient.Create(createCtx, jobId, createJobPayload, job.DefaultCreateOperationOptions())
 	if err != nil {
 		sdk.SetResponseErrorDiagnostic(response, "creating runbook job", fmt.Sprintf("failed to create job for runbook %s: %v", model.RunbookName.ValueString(), err))
 		return

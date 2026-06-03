@@ -53,7 +53,6 @@ func NewPipelineTriggerAction() action.Action {
 
 // PipelineTriggerActionModel is the Terraform model for the action config block.
 type PipelineTriggerActionModel struct {
-	OrganizationURL     types.String `tfsdk:"organization_url"`
 	Project             types.String `tfsdk:"project"`
 	PipelineID          types.Int64  `tfsdk:"pipeline_id"`
 	AuthMethod          types.String `tfsdk:"auth_method"`
@@ -105,12 +104,8 @@ func (p *PipelineTriggerAction) Metadata(_ context.Context, _ action.MetadataReq
 func (p *PipelineTriggerAction) Schema(_ context.Context, _ action.SchemaRequest, response *action.SchemaResponse) {
 	response.Schema = schema.Schema{
 		MarkdownDescription: "Triggers an Azure DevOps pipeline run. Supports Personal Access Token (PAT) " +
-			"and service principal (Azure AD) authentication methods.",
+			"and service principal (Azure AD) authentication methods. Configure `organization_url` on the provider.",
 		Attributes: map[string]schema.Attribute{
-			"organization_url": schema.StringAttribute{
-				Required:            true,
-				MarkdownDescription: "The URL of the Azure DevOps organisation, e.g. https://dev.azure.com/myorg.",
-			},
 			"project": schema.StringAttribute{
 				Required:            true,
 				MarkdownDescription: "The name or ID of the Azure DevOps project.",
@@ -189,6 +184,12 @@ func (p *PipelineTriggerAction) Invoke(ctx context.Context, request action.Invok
 		return
 	}
 
+	orgURL, err := p.organizationURL()
+	if err != nil {
+		sdk.SetResponseErrorDiagnostic(response, "missing provider organization_url", err)
+		return
+	}
+
 	// Build the request body
 	body, err := p.buildRequestBody(ctx, model)
 	if err != nil {
@@ -196,7 +197,6 @@ func (p *PipelineTriggerAction) Invoke(ctx context.Context, request action.Invok
 		return
 	}
 
-	orgURL := strings.TrimRight(model.OrganizationURL.ValueString(), "/")
 	project := url.PathEscape(model.Project.ValueString())
 	pipelineID := model.PipelineID.ValueInt64()
 
@@ -263,6 +263,19 @@ func (p *PipelineTriggerAction) Invoke(ctx context.Context, request action.Invok
 			Message: fmt.Sprintf("Pipeline run %d triggered successfully (not waiting for completion)", run.ID),
 		})
 	}
+}
+
+func (p *PipelineTriggerAction) organizationURL() (string, error) {
+	if p.Client == nil {
+		return "", fmt.Errorf("provider client is not configured")
+	}
+
+	orgURL := strings.TrimRight(strings.TrimSpace(p.Client.Config.OrganizationURL), "/")
+	if orgURL == "" {
+		return "", fmt.Errorf("organization_url must be configured in the provider block for Azure DevOps actions")
+	}
+
+	return orgURL, nil
 }
 
 // resolveAuthHeader returns the Authorization header value to use for the

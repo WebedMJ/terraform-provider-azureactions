@@ -33,7 +33,7 @@ const (
 	envARMClientSecret     = "ARM_CLIENT_SECRET"
 	envAzureTenantID       = "AZURE_TENANT_ID"
 	envARMTenantID         = "ARM_TENANT_ID"
-	envARMEnvironment      = "ARM_ENVIRONMENT"
+	envAzureDevOpsOrgURL   = "AZUREDEVOPS_ORG_URL"
 )
 
 var (
@@ -42,11 +42,12 @@ var (
 )
 
 type azureActionsProviderModel struct {
-	SubscriptionID types.String `tfsdk:"subscription_id"`
-	ClientID       types.String `tfsdk:"client_id"`
-	ClientSecret   types.String `tfsdk:"client_secret"`
-	TenantID       types.String `tfsdk:"tenant_id"`
-	Environment    types.String `tfsdk:"environment"`
+	SubscriptionID  types.String `tfsdk:"subscription_id"`
+	ClientID        types.String `tfsdk:"client_id"`
+	ClientSecret    types.String `tfsdk:"client_secret"`
+	TenantID        types.String `tfsdk:"tenant_id"`
+	Environment     types.String `tfsdk:"environment"`
+	OrganizationURL types.String `tfsdk:"organization_url"`
 }
 
 func New(version string) func() provider.Provider {
@@ -87,6 +88,10 @@ func (p *azureActionsProvider) Schema(_ context.Context, _ provider.SchemaReques
 				Optional:            true,
 				MarkdownDescription: "The Cloud Environment which should be used. Possible values are public, usgovernment, and china. Defaults to public.",
 			},
+			"organization_url": schema.StringAttribute{
+				Optional:            true,
+				MarkdownDescription: "Optional Azure DevOps organization URL used by DevOps actions, for example `https://dev.azure.com/myorg`. This is not required for Azure Automation actions. Can also be supplied via `AZUREDEVOPS_ORG_URL`.",
+			},
 		},
 	}
 }
@@ -106,6 +111,7 @@ func (p *azureActionsProvider) Configure(ctx context.Context, request provider.C
 	config.ClientID = providerValueOrEnv(data.ClientID, envAzureClientID, envARMClientID)
 	config.ClientSecret = providerValueOrEnv(data.ClientSecret, envAzureClientSecret, envARMClientSecret)
 	config.TenantID = providerValueOrEnv(data.TenantID, envAzureTenantID, envARMTenantID)
+	config.OrganizationURL = providerValueOrEnv(data.OrganizationURL, envAzureDevOpsOrgURL)
 
 	// Set environment from config or environment, default to public
 	environment := "public"

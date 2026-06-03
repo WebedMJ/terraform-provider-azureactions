@@ -52,6 +52,7 @@ provider "azureactions" {
   client_id       = "your-client-id"
   client_secret   = "your-client-secret"
   tenant_id       = "your-tenant-id"
+  organization_url = "https://dev.azure.com/myorg" # Optional, required only for DevOps actions
   environment     = "public" # Optional: public, usgovernment, china
 }
 ```
@@ -63,6 +64,7 @@ Environment variables supported by the provider include:
 - `AZURE_CLIENT_SECRET` (or `ARM_CLIENT_SECRET` alias)
 - `AZURE_TENANT_ID` (or `ARM_TENANT_ID` alias)
 - `ARM_ENVIRONMENT`
+- `AZUREDEVOPS_ORG_URL` (optional, required for DevOps actions when not set in provider)
 
 Precedence is consistent for all of the above: provider block value first, then `AZURE_*`, then `ARM_*` alias.
 
@@ -176,7 +178,6 @@ variable "devops_pat" {
 
 action "azureactions_devops_pipeline_trigger" "deploy" {
   config {
-    organization_url      = "https://dev.azure.com/myorg"
     project               = "my-project"
     pipeline_id           = 42
     auth_method           = "pat"
@@ -209,9 +210,9 @@ resource "azurerm_linux_virtual_machine" "app" {
 # credential chain (Azure CLI locally, workload identity / managed identity /
 # environment credentials in CI/runtime) to obtain an Azure AD token for
 # Azure DevOps using scope 499b84ac-1321-427f-aa17-267ca6975798/.default.
+# organization_url must be configured in the provider block.
 action "azureactions_devops_pipeline_trigger" "deploy_dac" {
   config {
-    organization_url = "https://dev.azure.com/myorg"
     project          = "my-project"
     pipeline_id      = 42
     auth_method      = "default_azure_credential"

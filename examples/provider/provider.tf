@@ -7,10 +7,11 @@ terraform {
 }
 
 provider "azureactions" {
-  subscription_id = var.subscription_id
-  client_id       = var.client_id
-  client_secret   = var.client_secret
-  tenant_id       = var.tenant_id
+  subscription_id  = var.subscription_id
+  client_id        = var.client_id
+  client_secret    = var.client_secret
+  tenant_id        = var.tenant_id
+  organization_url = var.organization_url
 }
 
 variable "subscription_id" {
@@ -32,4 +33,10 @@ variable "client_secret" {
 variable "tenant_id" {
   type        = string
   description = "The Azure tenant ID"
+}
+
+variable "organization_url" {
+  type        = string
+  default     = ""
+  description = "Optional Azure DevOps organization URL. Required for DevOps actions."
 }

@@ -60,7 +60,7 @@ func (m *mockAzureTokenCredential) GetToken(_ context.Context, opts policy.Token
 }
 
 // newDevOpsTestClient returns a *clients.Client suitable for unit tests.
-func newDevOpsTestClient() *clients.Client {
+func newDevOpsTestClient(organizationURL string) *clients.Client {
 	credential := &mockAzureTokenCredential{token: "mock-devops-credential-token"}
 
 	return &clients.Client{
@@ -71,11 +71,12 @@ func newDevOpsTestClient() *clients.Client {
 			Environment:    "public",
 		},
 		Config: clients.Config{
-			SubscriptionID: "test-subscription-id",
-			TenantID:       "test-tenant-id",
-			ClientID:       "test-client-id",
-			ClientSecret:   "test-secret",
-			Environment:    "public",
+			SubscriptionID:  "test-subscription-id",
+			TenantID:        "test-tenant-id",
+			ClientID:        "test-client-id",
+			ClientSecret:    "test-secret",
+			Environment:     "public",
+			OrganizationURL: organizationURL,
 		},
 		Environment: &environments.Environment{
 			Name:            "test",
@@ -98,7 +99,7 @@ func newTestAction(server *httptest.Server) *PipelineTriggerAction {
 		},
 		pollInterval: 50 * time.Millisecond,
 	}
-	req := action.ConfigureRequest{ProviderData: newDevOpsTestClient()}
+	req := action.ConfigureRequest{ProviderData: newDevOpsTestClient("https://dev.azure.com/myorg")}
 	resp := &action.ConfigureResponse{}
 	a.Configure(context.Background(), req, resp)
 	return a
@@ -130,7 +131,7 @@ func (t *hostRewriteTransport) RoundTrip(req *http.Request) (*http.Response, err
 // buildDevOpsConfig constructs a tfsdk.Config for the pipeline trigger action.
 func buildDevOpsConfig(
 	t *testing.T,
-	orgURL, project string,
+	project string,
 	pipelineID int64,
 	authMethod, pat, branchRef string,
 	waitForCompletion *bool,
@@ -178,7 +179,6 @@ func buildDevOpsConfig(
 	}
 
 	rawValue := tftypes.NewValue(schemaType, map[string]tftypes.Value{
-		"organization_url":      tftypes.NewValue(tftypes.String, orgURL),
 		"project":               tftypes.NewValue(tftypes.String, project),
 		"pipeline_id":           tftypes.NewValue(tftypes.Number, pipelineID),
 		"auth_method":           tftypes.NewValue(tftypes.String, authMethod),
@@ -262,10 +262,14 @@ func TestPipelineTriggerAction_Schema(t *testing.T) {
 		t.Fatalf("unexpected schema diagnostics: %v", resp.Diagnostics)
 	}
 
-	for _, attr := range []string{"organization_url", "project", "pipeline_id", "auth_method"} {
+	for _, attr := range []string{"project", "pipeline_id", "auth_method"} {
 		if _, ok := resp.Schema.Attributes[attr]; !ok {
 			t.Errorf("expected attribute %q in schema", attr)
 		}
+	}
+
+	if _, ok := resp.Schema.Attributes["organization_url"]; ok {
+		t.Error("organization_url must not be configurable on devops action")
 	}
 
 	if _, ok := resp.Schema.Attributes["personal_access_token"]; !ok {
@@ -296,7 +300,7 @@ func TestPipelineTriggerAction_Invoke_PAT_Success(t *testing.T) {
 
 	a := newTestAction(server)
 	cfg := buildDevOpsConfig(t,
-		"https://dev.azure.com/myorg", "my-project", 1,
+		"my-project", 1,
 		authMethodPAT, "my-pat-token", "",
 		nil, nil,
 	)
@@ -320,7 +324,7 @@ func TestPipelineTriggerAction_Invoke_ServicePrincipal_Success(t *testing.T) {
 
 	a := newTestAction(server)
 	cfg := buildDevOpsConfig(t,
-		"https://dev.azure.com/myorg", "my-project", 1,
+		"my-project", 1,
 		authMethodSP, "", "",
 		nil, nil,
 	)
@@ -341,7 +345,7 @@ func TestPipelineTriggerAction_Invoke_DefaultAzureCredential_Success(t *testing.
 
 	a := newTestAction(server)
 	cfg := buildDevOpsConfig(t,
-		"https://dev.azure.com/myorg", "my-project", 1,
+		"my-project", 1,
 		authMethodDAC, "", "",
 		nil, nil,
 	)
@@ -364,7 +368,7 @@ func TestPipelineTriggerAction_Invoke_WaitForCompletion_Succeeded(t *testing.T) 
 	waitTrue := true
 	timeoutMins := int64(1)
 	cfg := buildDevOpsConfig(t,
-		"https://dev.azure.com/myorg", "my-project", 1,
+		"my-project", 1,
 		authMethodPAT, "my-pat", "",
 		&waitTrue, &timeoutMins,
 	)
@@ -387,7 +391,7 @@ func TestPipelineTriggerAction_Invoke_WaitForCompletion_Failed(t *testing.T) {
 	waitTrue := true
 	timeoutMins := int64(1)
 	cfg := buildDevOpsConfig(t,
-		"https://dev.azure.com/myorg", "my-project", 1,
+		"my-project", 1,
 		authMethodPAT, "my-pat", "",
 		&waitTrue, &timeoutMins,
 	)
@@ -414,7 +418,7 @@ func TestPipelineTriggerAction_Invoke_APIError(t *testing.T) {
 
 	a := newTestAction(server)
 	cfg := buildDevOpsConfig(t,
-		"https://dev.azure.com/myorg", "my-project", 1,
+		"my-project", 1,
 		authMethodPAT, "invalid-pat", "",
 		nil, nil,
 	)
@@ -435,7 +439,7 @@ func TestPipelineTriggerAction_Invoke_InvalidAuthMethod(t *testing.T) {
 
 	a := newTestAction(server)
 	cfg := buildDevOpsConfig(t,
-		"https://dev.azure.com/myorg", "my-project", 1,
+		"my-project", 1,
 		"oauth2_legacy", "", "", // unsupported auth method
 		nil, nil,
 	)
@@ -456,7 +460,7 @@ func TestPipelineTriggerAction_Invoke_PAT_Missing(t *testing.T) {
 
 	a := newTestAction(server)
 	cfg := buildDevOpsConfig(t,
-		"https://dev.azure.com/myorg", "my-project", 1,
+		"my-project", 1,
 		authMethodPAT, "", "", // no PAT provided
 		nil, nil,
 	)
@@ -478,6 +482,9 @@ func TestPipelineTriggerAction_ResolveAuthHeader_UsesFixedScope(t *testing.T) {
 			Client: &clients.Client{
 				Environment: &environments.Environment{Name: "test"},
 				Credential:  credential,
+				Config: clients.Config{
+					OrganizationURL: "https://dev.azure.com/myorg",
+				},
 			},
 		},
 	}
@@ -495,5 +502,33 @@ func TestPipelineTriggerAction_ResolveAuthHeader_UsesFixedScope(t *testing.T) {
 
 	if len(credential.scopes) != 1 || credential.scopes[0] != devOpsTokenScope {
 		t.Fatalf("expected scope %q, got: %#v", devOpsTokenScope, credential.scopes)
+	}
+}
+
+func TestPipelineTriggerAction_Invoke_MissingProviderOrganizationURL(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(newPipelineMux("completed", "succeeded"))
+	defer server.Close()
+
+	a := &PipelineTriggerAction{
+		httpClient: &http.Client{
+			Transport: &hostRewriteTransport{host: serverHost(server.URL)},
+		},
+		pollInterval: 50 * time.Millisecond,
+	}
+	req := action.ConfigureRequest{ProviderData: newDevOpsTestClient("")}
+	respCfg := &action.ConfigureResponse{}
+	a.Configure(context.Background(), req, respCfg)
+
+	cfg := buildDevOpsConfig(t,
+		"my-project", 1,
+		authMethodDAC, "", "",
+		nil, nil,
+	)
+
+	resp, _ := invokeDevOpsAction(t, a, cfg)
+	if !resp.Diagnostics.HasError() {
+		t.Fatal("expected diagnostics error for missing provider organization_url, got none")
 	}
 }

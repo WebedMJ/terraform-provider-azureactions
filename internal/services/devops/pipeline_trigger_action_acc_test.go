@@ -88,7 +88,6 @@ terraform {
 
 action "azureactions_devops_pipeline_trigger" "acc" {
   config {
-		organization_url    = %s
 		project             = %s
 		pipeline_id         = %d
 		auth_method         = "default_azure_credential"
@@ -114,7 +113,6 @@ resource "terraform_data" "trigger" {
 }
 `,
 		acctest.ProviderConfigFromEnv(t),
-		acctest.Q(acctest.Env(t, "AZUREDEVOPS_ORG_URL")),
 		acctest.Q(acctest.Env(t, "AZUREDEVOPS_PROJECT")),
 		parsedPipelineID,
 		acctest.Q(triggerValue),

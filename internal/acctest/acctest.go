@@ -87,17 +87,24 @@ func ProviderConfigFromEnv(t *testing.T) string {
 
 	subID := subscriptionID()
 	env := strings.TrimSpace(firstEnv("ARM_ENVIRONMENT", "AZURE_ENVIRONMENT"))
+	devOpsOrgURL := strings.TrimSpace(firstEnv("AZUREDEVOPS_ORG_URL"))
 
-	if subID != "" && env != "" {
-		return fmt.Sprintf("provider \"azureactions\" {\n  subscription_id = %s\n  environment     = %s\n}\n", Q(subID), Q(env))
-	}
+	var lines []string
 	if subID != "" {
-		return fmt.Sprintf("provider \"azureactions\" {\n  subscription_id = %s\n}\n", Q(subID))
+		lines = append(lines, fmt.Sprintf("  subscription_id = %s", Q(subID)))
 	}
 	if env != "" {
-		return fmt.Sprintf("provider \"azureactions\" {\n  environment = %s\n}\n", Q(env))
+		lines = append(lines, fmt.Sprintf("  environment     = %s", Q(env)))
 	}
-	return "provider \"azureactions\" {}\n"
+	if devOpsOrgURL != "" {
+		lines = append(lines, fmt.Sprintf("  organization_url = %s", Q(devOpsOrgURL)))
+	}
+
+	if len(lines) == 0 {
+		return "provider \"azureactions\" {}\n"
+	}
+
+	return fmt.Sprintf("provider \"azureactions\" {\n%s\n}\n", strings.Join(lines, "\n"))
 }
 
 func firstEnv(keys ...string) string {
