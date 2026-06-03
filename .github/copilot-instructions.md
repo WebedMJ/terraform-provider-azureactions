@@ -25,6 +25,7 @@ The provider is built with the [terraform-plugin-framework](https://github.com/h
 ```
 
 Each service area has:
+
 - `registration.go` – implements `sdk.ServiceRegistration`, listing its actions
 - One `*_action.go` file per action, implementing `sdk.Action`
 - One `*_action_test.go` file per action with mock-based unit tests
@@ -54,6 +55,7 @@ Each service area has:
 ## Security Critical Issues
 
 Review every change for:
+
 - Hardcoded secrets, API keys, PAT tokens, or credentials — these must never appear in source code
 - Credentials passed in log messages or progress events — use `[REDACTED]` if auth details must appear
 - Missing input validation before Azure API calls
@@ -63,6 +65,7 @@ Review every change for:
 ## Coding Standards
 
 ### Go Conventions
+
 - Follow [Go code review guidelines](https://github.com/golang/go/wiki/CodeReviewComments) at all times
 - **Acronyms in identifiers must be all-caps**: use `ID`, `URL`, `HTTP`, `API`, `ARM`, `PAT` — never `Id`, `Url`, `Http` etc. This applies to struct fields, method names, local variables, and function parameters. Examples: `SubscriptionID`, `TenantID`, `ClientID`, `OrganizationURL`
 - Use `gofmt`-compliant formatting; run `make fmt` before committing
@@ -82,6 +85,7 @@ type Account struct {
 ```
 
 ### Terraform Best Practices
+
 - Use `terraform-plugin-framework` types (`types.String`, `types.Bool`, etc.) in all model structs
 - Mark sensitive attributes with `Sensitive: true` in **provider** and **resource** schemas (e.g. tokens, secrets). Action schemas (`action/schema`) do not support `Sensitive: true` — see **Security Defaults** below for the correct approach.
 - All required fields validated in `Invoke` before making API calls
@@ -89,6 +93,7 @@ type Account struct {
 - Use `response.SendProgress()` to report long-running operation status
 
 ### Azure Best Practices
+
 - Always research the **latest stable Azure REST API version** before implementing
 - Use go-azure-sdk typed clients (`job.NewJobClientWithBaseURI`, etc.) for Azure RM resources
 - For non-ARM Azure services (Azure DevOps, etc.) use `net/http` with proper auth headers
@@ -97,6 +102,7 @@ type Account struct {
 - Generate unique, human-readable job/run names (e.g. `"terraform-action-<unix-timestamp>"`)
 
 ### Security Defaults
+
 - All credentials (PAT tokens, client secrets) must be `Sensitive: true` in **provider** and **resource** schemas; **Note:** `action/schema` attributes do not support `Sensitive: true` (this is a Terraform framework limitation for actions). Advise users to supply sensitive action values via Terraform sensitive variables (`sensitive = true`) or environment variables, and document this clearly.
 - Default authentication: service principal via environment variables (`ARM_*`)
 - Never log credential values; use `[REDACTED]` if auth details must appear in messages
@@ -105,14 +111,35 @@ type Account struct {
 - Default `timeout_minutes = 30` when waiting, to prevent infinite hangs
 
 ### Testing
+
 - Every action **must** have a `_test.go` file with mock-based unit tests
 - Tests use `net/http/httptest.NewServer` as a mock Azure/DevOps API and a `mockAuthorizer` that returns a fake token (see existing tests for the pattern)
 - Create a `newTestClient(serverURL string)` helper per package to build a `*clients.Client` pointing at the test server
 - Test table entries should cover: success, job/run failure, timeout/error conditions
 - Acceptance tests (requiring real Azure credentials) are tagged with `TF_ACC=1` and live in `*_acc_test.go` files
+- If acceptance infrastructure is not yet available, keep `*_acc_test.go` files as explicit placeholders that `t.Skip(...)` unless `TF_ACC` is set
 - Run unit tests: `make test` | Run acceptance tests: `make testacc`
 
+### Scaffolding Alignment Learnings (Session)
+
+- Follow the scaffolding pattern for provider startup and versioning: keep `var version = "dev"` in `main.go`, pass `provider.New(version)` to `providerserver.Serve`, and set `response.Version` in provider `Metadata()`
+- Prefer protocol v6 server wiring (`providerserver.Serve`) for framework alignment
+- Use `MarkdownDescription` instead of `Description` for provider/action schemas to support generated docs and consistent registry rendering
+- Keep generated-doc workflow available via `tools/tools.go` and a `make generate` target (`go generate ./tools`)
+- Maintain example coverage under `examples/` for each action to support docs and usability
+
+### Local Development OS Awareness
+
+- Before running local commands, check the developer OS/shell and choose compatible commands (PowerShell vs bash)
+- On Windows PowerShell, do **not** assume Unix tools like `tail`/`grep` are available
+- PowerShell-friendly equivalents:
+  - `tail -n 20` -> `Select-Object -Last 20`
+  - `grep "pattern"` -> `Select-String "pattern"`
+  - `ls -lh` -> `Get-ChildItem` (or `ls`) and format output in PowerShell style
+- Keep command examples OS-aware in docs, reviews, and troubleshooting notes to reduce friction for contributors
+
 ### Documentation
+
 - Keep `README.md` up to date with every new action: schema, HCL example, auth options
 - Update `examples/` with a working HCL snippet for each action
 
@@ -120,25 +147,26 @@ type Account struct {
 
 The provider supports:
 
-| Method | Config / Env vars |
-|--------|------------------|
-| Service Principal (secret) | `client_id`, `client_secret`, `tenant_id` / `ARM_CLIENT_ID`, `ARM_CLIENT_SECRET`, `ARM_TENANT_ID` |
-| Environment variables only | `ARM_*` env vars without provider block config |
+| Method                      | Config / Env vars                                                                                              |
+| --------------------------- | -------------------------------------------------------------------------------------------------------------- |
+| DefaultAzureCredential flow | Azure CLI / Azure Developer CLI / Azure PowerShell / managed identity / workload identity / `AZURE_*` env vars |
+| Service Principal (secret)  | `client_id`, `client_secret`, `tenant_id` / `ARM_CLIENT_ID`, `ARM_CLIENT_SECRET`, `ARM_TENANT_ID`              |
+| Subscription selection      | `subscription_id` / `ARM_SUBSCRIPTION_ID` / `AZURE_SUBSCRIPTION_ID`                                            |
 
 For Azure DevOps actions, additional auth methods are supported at the **action level**:
 
-| Method | Action attribute |
-|--------|-----------------|
-| Personal Access Token (PAT) | `personal_access_token` (sensitive) |
-| Service Principal (reuses provider SP credentials) | `auth_method = "service_principal"` |
+| Method                                   | Action attribute                                                                   |
+| ---------------------------------------- | ---------------------------------------------------------------------------------- |
+| Personal Access Token (PAT)              | `personal_access_token` (sensitive)                                                |
+| DefaultAzureCredential-backed Entra auth | `auth_method = "default_azure_credential"` (`service_principal` retained as alias) |
 
 ## Key Dependencies
 
-| Package | Purpose |
-|---------|---------|
-| `github.com/hashicorp/terraform-plugin-framework` | Terraform provider SDK |
-| `github.com/hashicorp/go-azure-sdk/resource-manager` | Azure RM typed API clients |
-| `github.com/hashicorp/go-azure-sdk/sdk` | Auth, environments, HTTP client |
+| Package                                              | Purpose                         |
+| ---------------------------------------------------- | ------------------------------- |
+| `github.com/hashicorp/terraform-plugin-framework`    | Terraform provider SDK          |
+| `github.com/hashicorp/go-azure-sdk/resource-manager` | Azure RM typed API clients      |
+| `github.com/hashicorp/go-azure-sdk/sdk`              | Auth, environments, HTTP client |
 
 ## Resources
 

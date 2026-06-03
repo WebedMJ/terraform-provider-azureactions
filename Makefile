@@ -1,4 +1,4 @@
-TEST?=$$(go list ./... | grep -v 'vendor')
+TEST?=./...
 TESTTIMEOUT=180m
 
 .EXPORT_ALL_VARIABLES:
@@ -11,16 +11,20 @@ build: fmt
 
 fmt:
 	@echo "==> Fixing source code with gofmt..."
-	find . -name '*.go' | grep -v vendor | xargs gofmt -s -w
+	gofmt -s -w .
 
 fmtcheck:
 	@sh -c "'$(CURDIR)/scripts/gofmtcheck.sh'"
+
+generate:
+	@echo "==> Generating documentation..."
+	go generate ./tools
 
 test: fmtcheck
 	go test $(TEST) -v $(TESTARGS) -timeout $(TESTTIMEOUT)
 
 testacc: fmtcheck
-	TF_ACC=1 go test $(TEST) -v $(TESTARGS) -timeout $(TESTTIMEOUT)
+	TF_ACC=1 go test -tags=acceptance $(TEST) -v $(TESTARGS) -timeout $(TESTTIMEOUT)
 
 vet:
 	@echo "==> Running go vet..."
@@ -34,4 +38,4 @@ tidy:
 	@echo "==> Tidying go mod..."
 	@go mod tidy
 
-.PHONY: build test testacc vet fmt fmtcheck deps tidy
+.PHONY: build test testacc vet fmt fmtcheck deps tidy generate

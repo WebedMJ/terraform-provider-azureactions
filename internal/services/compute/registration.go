@@ -12,11 +12,6 @@ type Registration struct{}
 
 var _ sdk.ServiceRegistration = Registration{}
 
-// Name returns the name of this service
-func (r Registration) Name() string {
-	return "Compute"
-}
-
 // Actions returns the actions supported by this service
 func (r Registration) Actions() []func() action.Action {
 	return []func() action.Action{

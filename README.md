@@ -13,20 +13,38 @@ This provider enables Terraform actions for Azure resources, allowing you to per
 
 ## Building the Provider
 
-1. Clone the repository:
+Clone the repository:
+
 ```bash
 git clone https://github.com/WebedMJ/terraform-provider-azureactions
 cd terraform-provider-azureactions
 ```
 
-2. Build and install the provider:
+Build and install the provider:
+
 ```bash
 make build
 ```
 
 ## Configuration
 
-The provider supports authentication via service principal credentials:
+The provider uses Azure Identity / DefaultAzureCredential behavior for Azure authentication.
+
+Recommended local development flow:
+
+```bash
+az login
+export AZURE_SUBSCRIPTION_ID="your-subscription-id"
+```
+
+Recommended CI/authenticated runtime flows:
+
+1. Workload identity / OIDC via `AZURE_*` environment variables
+2. Managed identity
+3. Azure CLI / Azure Developer CLI / Azure PowerShell developer sign-in
+4. Explicit client secret override via provider config or environment variables
+
+Explicit service principal configuration remains supported as an override:
 
 ```hcl
 provider "azureactions" {
@@ -38,12 +56,17 @@ provider "azureactions" {
 }
 ```
 
-Alternatively, you can use environment variables:
-- `ARM_SUBSCRIPTION_ID`
-- `ARM_CLIENT_ID`
-- `ARM_CLIENT_SECRET`
-- `ARM_TENANT_ID`
+Environment variables supported by the provider include:
+
+- `AZURE_SUBSCRIPTION_ID` (or `ARM_SUBSCRIPTION_ID` alias)
+- `AZURE_CLIENT_ID` (or `ARM_CLIENT_ID` alias)
+- `AZURE_CLIENT_SECRET` (or `ARM_CLIENT_SECRET` alias)
+- `AZURE_TENANT_ID` (or `ARM_TENANT_ID` alias)
 - `ARM_ENVIRONMENT`
+
+Precedence is consistent for all of the above: provider block value first, then `AZURE_*`, then `ARM_*` alias.
+
+When no explicit client secret configuration is provided, the provider falls back to DefaultAzureCredential-compatible resolution, which allows local Azure CLI authentication and CI identity-based authentication without changing Terraform configuration.
 
 ## Usage
 
@@ -134,7 +157,7 @@ resource "azurerm_linux_virtual_machine" "web_server" {
       events  = [before_update]
       actions = [action.azureactions_automation_runbook_trigger.pre_maintenance]
     }
-    
+
     action_trigger {
       events  = [after_update]
       actions = [action.azureactions_automation_runbook_trigger.post_maintenance]
@@ -179,17 +202,19 @@ resource "azurerm_linux_virtual_machine" "app" {
 }
 ```
 
-### Azure DevOps Pipeline Trigger (service principal authentication)
+### Azure DevOps Pipeline Trigger (DefaultAzureCredential authentication)
 
 ```hcl
-# auth_method = "service_principal" reuses the provider-level SP credentials
-# to obtain an Azure AD token scoped to Azure DevOps automatically.
-action "azureactions_devops_pipeline_trigger" "deploy_sp" {
+# auth_method = "default_azure_credential" reuses the provider-level Azure
+# credential chain (Azure CLI locally, workload identity / managed identity /
+# environment credentials in CI/runtime) to obtain an Azure AD token scoped to
+# Azure DevOps automatically.
+action "azureactions_devops_pipeline_trigger" "deploy_dac" {
   config {
     organization_url = "https://dev.azure.com/myorg"
     project          = "my-project"
     pipeline_id      = 42
-    auth_method      = "service_principal"
+    auth_method      = "default_azure_credential"
     branch_ref       = "refs/heads/release"
     template_parameters = {
       deployTarget = "eastus"
@@ -206,14 +231,17 @@ action "azureactions_devops_pipeline_trigger" "deploy_sp" {
 This provider supports various Azure actions:
 
 ### Azure Automation
+
 - **`azureactions_automation_runbook_trigger`**: Triggers an Azure Automation runbook execution with optional parameter passing and completion waiting.
 
 ### Azure DevOps
-- **`azureactions_devops_pipeline_trigger`**: Triggers an Azure DevOps pipeline run. Supports Personal Access Token (PAT) and service principal (Azure AD) authentication. Supports branch overrides, pipeline variables, template parameters, stage skipping, and optional waiting for completion.
+
+- **`azureactions_devops_pipeline_trigger`**: Triggers an Azure DevOps pipeline run. Supports Personal Access Token (PAT) and DefaultAzureCredential-backed Microsoft Entra authentication (with `service_principal` retained as a backwards-compatible alias). Supports branch overrides, pipeline variables, template parameters, stage skipping, and optional waiting for completion.
 
 ### Planned Actions
+
 The provider structure is ready for implementing additional Azure actions such as:
-- Virtual Machine power operations (start, stop, restart)
+
 - App Service deployment slot management
 - Database scaling operations
 - Storage account maintenance tasks
@@ -237,25 +265,121 @@ go test ./internal/services/automation/... -v
 go test ./internal/services/devops/... -v
 ```
 
-### Running Acceptance Tests (requires real Azure credentials)
+### Running Acceptance Tests (real infrastructure required)
 
-> **Note:** Acceptance tests are not yet implemented. The `make testacc` target and `TF_ACC`-tagged test files are placeholders for future end-to-end tests that make real API calls to Azure.
+Acceptance tests execute real Azure Automation and Azure DevOps operations. They are build-tagged and run only when both `TF_ACC=1` and the `acceptance` build tag are provided.
 
-When acceptance tests are added, they will require the following environment variables:
+#### Definitive Infrastructure Requirements
+
+You must provision these resources before running acceptance tests.
+
+##### Shared Azure Foundation
+
+1. Azure subscription dedicated for test execution.
+2. Azure identity with access to test resources. This can be a local Azure CLI login, workload identity, managed identity, or explicit service principal.
+3. Resource group for acceptance tests.
+
+Recommended minimum access for the Azure identity used during test execution:
+
+1. `Contributor` on the acceptance-test resource group.
+2. Ability to read and invoke Automation jobs in the Automation Account used for tests.
+
+##### Azure Automation Infrastructure
+
+1. Existing Automation Account in the test resource group.
+2. Existing published runbook with name used by tests (`ACC_TEST_RUNBOOK_NAME`).
+3. Runbook should be deterministic and complete quickly.
+4. Runbook should accept string parameters (tests send `Source`, `Trigger`, and `TestType`).
+
+##### Azure DevOps Infrastructure
+
+1. Existing Azure DevOps organization.
+2. Existing project.
+3. Existing pipeline with a stable numeric pipeline ID.
+4. The Microsoft Entra identity used by the provider must be recognized in Azure DevOps and granted permission to queue/read the target pipeline.
+5. Pipeline should run non-interactively (no manual approvals/gates for test path).
+
+#### Required Environment Variables (full list)
+
+All acceptance test runs require these variables.
+
+| Variable                      | Required For                                                    | Example Value                          |
+| ----------------------------- | --------------------------------------------------------------- | -------------------------------------- |
+| `AZURE_SUBSCRIPTION_ID`       | all acceptance tests (`ARM_SUBSCRIPTION_ID` supported as alias) | `11111111-2222-3333-4444-555555555555` |
+| `ACC_TEST_RG`                 | automation tests                                                | `rg-azureactions-acc-eastus`           |
+| `ACC_TEST_AUTOMATION_ACCOUNT` | automation tests                                                | `aa-azureactions-acc`                  |
+| `ACC_TEST_RUNBOOK_NAME`       | automation tests                                                | `Run-AccTest-NoOp`                     |
+| `AZUREDEVOPS_ORG_URL`         | devops tests                                                    | `https://dev.azure.com/contoso`        |
+| `AZUREDEVOPS_PROJECT`         | devops tests                                                    | `platform-shared`                      |
+| `AZUREDEVOPS_PIPELINE_ID`     | devops tests                                                    | `42`                                   |
+| `AZURE_CLIENT_ID`             | optional, workload identity or user-assigned managed identity   | `aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee` |
+| `AZURE_TENANT_ID`             | optional, workload identity / environment credential            | `99999999-8888-7777-6666-555555555555` |
+| `AZURE_CLIENT_SECRET`         | optional, explicit service principal secret                     | `super-secret-sp-password`             |
+
+#### Example Environment Setup
+
+Linux/macOS (bash):
 
 ```bash
-export ARM_SUBSCRIPTION_ID="your-subscription-id"
-export ARM_CLIENT_ID="your-client-id"
-export ARM_CLIENT_SECRET="your-client-secret"
-export ARM_TENANT_ID="your-tenant-id"
+export AZURE_SUBSCRIPTION_ID="11111111-2222-3333-4444-555555555555"
 
-# Run acceptance tests (once implemented)
+export ACC_TEST_RG="rg-azureactions-acc-eastus"
+export ACC_TEST_AUTOMATION_ACCOUNT="aa-azureactions-acc"
+export ACC_TEST_RUNBOOK_NAME="Run-AccTest-NoOp"
+
+export AZUREDEVOPS_ORG_URL="https://dev.azure.com/contoso"
+export AZUREDEVOPS_PROJECT="platform-shared"
+export AZUREDEVOPS_PIPELINE_ID="42"
+
+# Optional if using workload identity or explicit service principal auth
+export AZURE_CLIENT_ID="aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+export AZURE_TENANT_ID="99999999-8888-7777-6666-555555555555"
+export AZURE_CLIENT_SECRET="super-secret-sp-password"
+```
+
+Windows PowerShell:
+
+```powershell
+$env:AZURE_SUBSCRIPTION_ID = "11111111-2222-3333-4444-555555555555"
+
+$env:ACC_TEST_RG = "rg-azureactions-acc-eastus"
+$env:ACC_TEST_AUTOMATION_ACCOUNT = "aa-azureactions-acc"
+$env:ACC_TEST_RUNBOOK_NAME = "Run-AccTest-NoOp"
+
+$env:AZUREDEVOPS_ORG_URL = "https://dev.azure.com/contoso"
+$env:AZUREDEVOPS_PROJECT = "platform-shared"
+$env:AZUREDEVOPS_PIPELINE_ID = "42"
+
+# Optional if using workload identity or explicit service principal auth
+$env:AZURE_CLIENT_ID = "aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee"
+$env:AZURE_TENANT_ID = "99999999-8888-7777-6666-555555555555"
+$env:AZURE_CLIENT_SECRET = "super-secret-sp-password"
+```
+
+#### How to Run
+
+Run only Automation acceptance tests:
+
+```bash
+TF_ACC=1 go test -tags=acceptance ./internal/services/automation/... -v -timeout 30m
+```
+
+Run only DevOps acceptance tests:
+
+```bash
+TF_ACC=1 go test -tags=acceptance ./internal/services/devops/... -v -timeout 30m
+```
+
+Run all acceptance tests via Makefile:
+
+```bash
 make testacc
 ```
 
 ### CI
 
 Tests run automatically on every pull request via the GitHub Actions workflow defined in `.github/workflows/test.yml`. The workflow runs:
+
 1. `gofmt` formatting check
 2. `go vet` static analysis
 3. All unit tests (`go test ./...`)
@@ -273,6 +397,16 @@ make build
 ```bash
 make fmt
 ```
+
+### Generating Documentation
+
+Documentation is generated from schema and example HCL files using `tfplugindocs`:
+
+```bash
+make generate
+```
+
+Generated documentation will be placed in the `docs/` directory and can be published to the Terraform Registry.
 
 ## Contributing
 

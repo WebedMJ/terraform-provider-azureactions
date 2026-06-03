@@ -40,32 +40,32 @@ type RunbookTriggerActionModel struct {
 
 func (r *RunbookTriggerAction) Schema(_ context.Context, _ action.SchemaRequest, response *action.SchemaResponse) {
 	response.Schema = schema.Schema{
-		Description: "Triggers an Azure Automation runbook execution.",
+		MarkdownDescription: "Triggers an Azure Automation runbook execution.",
 		Attributes: map[string]schema.Attribute{
 			"automation_account_name": schema.StringAttribute{
-				Required:    true,
-				Description: "The name of the Azure Automation Account containing the runbook.",
+				Required:            true,
+				MarkdownDescription: "The name of the Azure Automation Account containing the runbook.",
 			},
 			"resource_group_name": schema.StringAttribute{
-				Required:    true,
-				Description: "The name of the resource group containing the Automation Account.",
+				Required:            true,
+				MarkdownDescription: "The name of the resource group containing the Automation Account.",
 			},
 			"runbook_name": schema.StringAttribute{
-				Required:    true,
-				Description: "The name of the runbook to execute.",
+				Required:            true,
+				MarkdownDescription: "The name of the runbook to execute.",
 			},
 			"parameters": schema.MapAttribute{
-				Optional:    true,
-				ElementType: types.StringType,
-				Description: "Parameters to pass to the runbook. Keys are parameter names, values are parameter values.",
+				Optional:            true,
+				ElementType:         types.StringType,
+				MarkdownDescription: "Parameters to pass to the runbook. Keys are parameter names, values are parameter values.",
 			},
 			"wait_for_completion": schema.BoolAttribute{
-				Optional:    true,
-				Description: "Whether to wait for the runbook job to complete before returning. Defaults to false.",
+				Optional:            true,
+				MarkdownDescription: "Whether to wait for the runbook job to complete before returning. Defaults to false.",
 			},
 			"timeout_minutes": schema.Int64Attribute{
-				Optional:    true,
-				Description: "Maximum time to wait for job completion in minutes. Only used when wait_for_completion is true. Defaults to 30.",
+				Optional:            true,
+				MarkdownDescription: "Maximum time to wait for job completion in minutes. Only used when wait_for_completion is true. Defaults to 30.",
 			},
 		},
 	}
@@ -80,6 +80,14 @@ func (r *RunbookTriggerAction) Invoke(ctx context.Context, request action.Invoke
 
 	response.Diagnostics.Append(request.Config.Get(ctx, &model)...)
 	if response.Diagnostics.HasError() {
+		return
+	}
+
+	// Subscription ID is required for all ARM-based automation operations.
+	if r.SubscriptionID == "" {
+		sdk.SetResponseErrorDiagnostic(response, "Missing Subscription ID",
+			"subscription_id must be configured when using automation actions. "+
+				"Set it via the provider block, AZURE_SUBSCRIPTION_ID, or ARM_SUBSCRIPTION_ID.")
 		return
 	}
 
@@ -155,6 +163,12 @@ func (r *RunbookTriggerAction) Invoke(ctx context.Context, request action.Invoke
 		timeoutMinutes := int64(30) // default timeout
 		if !model.TimeoutMinutes.IsNull() && !model.TimeoutMinutes.IsUnknown() {
 			timeoutMinutes = model.TimeoutMinutes.ValueInt64()
+		}
+
+		if timeoutMinutes < 1 {
+			sdk.SetResponseErrorDiagnostic(response, "invalid timeout_minutes",
+				fmt.Errorf("timeout_minutes must be at least 1, got %d", timeoutMinutes))
+			return
 		}
 
 		timeout := time.Duration(timeoutMinutes) * time.Minute
