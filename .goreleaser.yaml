@@ -50,16 +50,8 @@ checksum:
   algorithm: sha256
 
 signs:
-  - cmd: gpg
-    args:
-      - --batch
-      - -u
-      - "{{ .Env.GPG_FINGERPRINT }}"
-      - --output
-      - $signature
-      - --detach-sign
-      - $artifact
-    artifacts: checksum
+  - artifacts: checksum
+    args: ["--batch", "-u", "{{ .Env.GPG_FINGERPRINT }}", "--output", "${signature}", "--detach-sign", "${artifact}"]
     output: "{{ .ProjectName }}_{{ .Version }}_SHA256SUMS.sig"
 
 changelog:
