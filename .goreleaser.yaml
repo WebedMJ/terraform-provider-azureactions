@@ -33,7 +33,7 @@ builds:
     binary: terraform-provider-azureactions_v{{.Version}}
 
 archives:
-  - format: zip
+  - formats: [zip]
     # Use name_template to ensure archives match Terraform provider naming scheme
     name_template: "{{ .ProjectName }}_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
 
