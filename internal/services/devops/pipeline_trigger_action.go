@@ -33,7 +33,6 @@ const (
 	authMethodSP            = "service_principal"
 	authMethodDAC           = "default_azure_credential"
 	defaultPollSeconds      = 15
-	httpClientTimeout       = 30 * time.Second // timeout for individual DevOps API calls
 	httpDialTimeout         = 10 * time.Second // timeout for establishing connection
 	httpTLSHandshakeTimeout = 10 * time.Second
 )
@@ -380,15 +379,14 @@ func (p *PipelineTriggerAction) buildRequestBody(ctx context.Context, model Pipe
 
 // getHTTPClient returns the HTTP client to use for DevOps API calls.
 // Tests can inject a custom client via the httpClient field.
-// If no custom client is set, returns a default client with explicit timeouts
-// to prevent indefinite hangs on network issues.
+// If no custom client is set, returns a default client with transport-level
+// timeouts. Request lifetime is controlled by the request context.
 func (p *PipelineTriggerAction) getHTTPClient() *http.Client {
 	if p.httpClient != nil {
 		return p.httpClient
 	}
-	// Return a client with explicit timeouts to avoid hangs on network failures
+	// Return a client with transport-level timeouts to avoid hangs on network failures.
 	return &http.Client{
-		Timeout: httpClientTimeout,
 		Transport: &http.Transport{
 			DialContext:         (&net.Dialer{Timeout: httpDialTimeout}).DialContext,
 			TLSHandshakeTimeout: httpTLSHandshakeTimeout,

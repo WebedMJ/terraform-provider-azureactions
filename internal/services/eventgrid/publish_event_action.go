@@ -35,7 +35,6 @@ const (
 	defaultTimeoutSeconds = int64(30)
 	defaultContentType    = "application/cloudevents-batch+json"
 
-	httpClientTimeout       = 30 * time.Second // timeout for individual publish operations
 	httpDialTimeout         = 10 * time.Second // timeout for establishing connection
 	httpTLSHandshakeTimeout = 10 * time.Second
 )
@@ -457,7 +456,6 @@ func (p *PublishEventAction) getHTTPClient() *http.Client {
 	}
 
 	return &http.Client{
-		Timeout: httpClientTimeout,
 		Transport: &http.Transport{
 			DialContext:         (&net.Dialer{Timeout: httpDialTimeout}).DialContext,
 			TLSHandshakeTimeout: httpTLSHandshakeTimeout,

@@ -497,10 +497,10 @@ func TestPipelineTriggerAction_HTTPClient_Timeout(t *testing.T) {
 	}
 }
 
-// TestPipelineTriggerAction_HTTPClient_HasExplicitTimeouts verifies that
-// the default HTTP client has explicit timeouts configured, preventing
-// indefinite hangs on network stalls.
-func TestPipelineTriggerAction_HTTPClient_HasExplicitTimeouts(t *testing.T) {
+// TestPipelineTriggerAction_HTTPClient_UsesContextTimeoutModel verifies that
+// the default HTTP client relies on request context for total timeout while
+// still configuring transport-level timeouts.
+func TestPipelineTriggerAction_HTTPClient_UsesContextTimeoutModel(t *testing.T) {
 	t.Parallel()
 
 	a := &PipelineTriggerAction{}
@@ -510,16 +510,12 @@ func TestPipelineTriggerAction_HTTPClient_HasExplicitTimeouts(t *testing.T) {
 		t.Fatal("getHTTPClient returned nil")
 	}
 
-	// Verify that the client has a timeout set (not zero)
-	if client.Timeout == 0 {
-		t.Error("HTTP client timeout is not set (Timeout == 0); should be 30 seconds")
+	// Total request timeout should be controlled by context, not a fixed client timeout.
+	if client.Timeout != 0 {
+		t.Errorf("HTTP client timeout is %v; expected 0 (context-driven timeout model)", client.Timeout)
 	}
 
-	if client.Timeout != httpClientTimeout {
-		t.Errorf("HTTP client timeout is %v; expected %v", client.Timeout, httpClientTimeout)
-	}
-
-	// Verify that Transport has dial timeout configured
+	// Verify that Transport is configured (including dial/TLS timeouts)
 	if client.Transport == nil {
 		t.Error("HTTP client Transport is nil; should have custom transport with timeouts")
 	}
