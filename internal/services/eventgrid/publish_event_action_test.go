@@ -302,8 +302,8 @@ func TestPublishEventAction_Metadata(t *testing.T) {
 	resp := &action.MetadataResponse{}
 	a.Metadata(context.Background(), action.MetadataRequest{}, resp)
 
-	if resp.TypeName != "azureactions_eventgrid_publish_event" {
-		t.Errorf("expected TypeName %q, got %q", "azureactions_eventgrid_publish_event", resp.TypeName)
+	if resp.TypeName != "azureactions_eventgrid_publish_cloudevent" {
+		t.Errorf("expected TypeName %q, got %q", "azureactions_eventgrid_publish_cloudevent", resp.TypeName)
 	}
 }
 

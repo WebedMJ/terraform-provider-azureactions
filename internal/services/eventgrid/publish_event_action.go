@@ -76,12 +76,12 @@ type CloudEventBlockModel struct {
 }
 
 func (p *PublishEventAction) Metadata(_ context.Context, _ action.MetadataRequest, response *action.MetadataResponse) {
-	response.TypeName = "azureactions_eventgrid_publish_event"
+	response.TypeName = "azureactions_eventgrid_publish_cloudevent"
 }
 
 func (p *PublishEventAction) Schema(_ context.Context, _ action.SchemaRequest, response *action.SchemaResponse) {
 	response.Schema = schema.Schema{
-		MarkdownDescription: "Publishes CloudEvents to an Azure Event Grid publish endpoint using Microsoft Entra ID, access key, or SAS token authentication.",
+		MarkdownDescription: "Publishes CloudEvents to an Azure Event Grid publish endpoint using Microsoft Entra ID, access key, or SAS token authentication. This action only publishes CloudEvents payloads. Configure the target Event Grid topic or domain to accept CloudEvents input schema, for example `input_schema = \"CloudEventSchemaV1_0\"` on `azurerm_eventgrid_topic` or `azurerm_eventgrid_domain`.",
 		Attributes: map[string]schema.Attribute{
 			"endpoint_url": schema.StringAttribute{
 				Required:            true,
@@ -110,7 +110,7 @@ func (p *PublishEventAction) Schema(_ context.Context, _ action.SchemaRequest, r
 		},
 		Blocks: map[string]schema.Block{
 			"cloud_event": schema.ListNestedBlock{
-				MarkdownDescription: "CloudEvent blocks to publish. Use repeated blocks or dynamic blocks. The provider encodes these into a CloudEvents JSON batch payload.",
+				MarkdownDescription: "CloudEvent blocks to publish. Use repeated blocks or dynamic blocks. The provider encodes these into a CloudEvents JSON batch payload. Event Grid resources configured for the legacy EventGridEvent schema will reject these payloads.",
 				NestedObject: schema.NestedBlockObject{
 					Attributes: map[string]schema.Attribute{
 						"specversion": schema.StringAttribute{

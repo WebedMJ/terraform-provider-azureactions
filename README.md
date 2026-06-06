@@ -256,10 +256,10 @@ action "azureactions_devops_pipeline_trigger" "deploy_dac" {
 }
 ```
 
-### Azure Event Grid Publish Event
+### Azure Event Grid Publish CloudEvent
 
 ```hcl
-action "azureactions_eventgrid_publish_event" "publish" {
+action "azureactions_eventgrid_publish_cloudevent" "publish" {
   config {
     endpoint_url = "https://mytopic.eastus-1.eventgrid.azure.net/api/events"
 
@@ -280,6 +280,8 @@ action "azureactions_eventgrid_publish_event" "publish" {
   }
 }
 ```
+
+This action only publishes CloudEvents payloads. The target Event Grid topic or domain must be configured to accept CloudEvents input schema, for example `input_schema = "CloudEventSchemaV1_0"` on `azurerm_eventgrid_topic` or `azurerm_eventgrid_domain`.
 
 `cloud_event` supports repeated blocks and dynamic blocks, so you can generate multiple events with `for_each` without building a full JSON array string manually.
 
@@ -312,7 +314,7 @@ This provider supports various Azure actions:
 
 ### Azure Event Grid
 
-- **`azureactions_eventgrid_publish_event`**: Publishes CloudEvents batch payloads to an Event Grid publish endpoint over HTTP. Supports `default_azure_credential` (default), `access_key`, and `sas_token` authentication modes.
+- **`azureactions_eventgrid_publish_cloudevent`**: Publishes CloudEvents batch payloads to an Event Grid publish endpoint over HTTP. Supports `default_azure_credential` (default), `access_key`, and `sas_token` authentication modes. The target Event Grid resource must be configured for CloudEvents input schema, for example `input_schema = "CloudEventSchemaV1_0"`.
 
 ### Planned Actions
 

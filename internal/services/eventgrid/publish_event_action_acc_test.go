@@ -84,7 +84,7 @@ terraform {
 
 %s
 
-action "azureactions_eventgrid_publish_event" "acc" {
+action "azureactions_eventgrid_publish_cloudevent" "acc" {
   config {
 		endpoint_url    = %s
 		timeout_seconds = 30
@@ -108,7 +108,7 @@ resource "terraform_data" "trigger" {
   lifecycle {
     action_trigger {
       events  = [after_update]
-      actions = [action.azureactions_eventgrid_publish_event.acc]
+			actions = [action.azureactions_eventgrid_publish_cloudevent.acc]
     }
   }
 }

@@ -1,13 +1,13 @@
 ---
-page_title: "azureactions_eventgrid_publish_event Action - azureactions"
+page_title: "azureactions_eventgrid_publish_cloudevent Action - azureactions"
 subcategory: ""
 description: |-
-  Publishes CloudEvents to an Azure Event Grid publish endpoint using Microsoft Entra ID, access key, or SAS token authentication.
+  Publishes CloudEvents to an Azure Event Grid publish endpoint using Microsoft Entra ID, access key, or SAS token authentication. This action only publishes CloudEvents payloads. Configure the target Event Grid topic or domain to accept CloudEvents input schema, for example input_schema = "CloudEventSchemaV1_0" on azurerm_eventgrid_topic or azurerm_eventgrid_domain.
 ---
 
-# azureactions_eventgrid_publish_event (Action)
+# azureactions_eventgrid_publish_cloudevent (Action)
 
-Publishes CloudEvents to an Azure Event Grid publish endpoint using Microsoft Entra ID, access key, or SAS token authentication.
+Publishes CloudEvents to an Azure Event Grid publish endpoint using Microsoft Entra ID, access key, or SAS token authentication. This action only publishes CloudEvents payloads. Configure the target Event Grid topic or domain to accept CloudEvents input schema, for example `input_schema = "CloudEventSchemaV1_0"` on `azurerm_eventgrid_topic` or `azurerm_eventgrid_domain`.
 
 ## Example Usage
 
@@ -18,21 +18,54 @@ terraform {
     azureactions = {
       source = "WebedMJ/azureactions"
     }
+
+    azurerm = {
+      source = "hashicorp/azurerm"
+    }
   }
 }
 
 provider "azureactions" {
-  subscription_id = "00000000-0000-0000-0000-000000000000" # Can come from AZURE_SUBSCRIPTION_ID / ARM_SUBSCRIPTION_ID.
+  subscription_id = var.subscription_id
 }
 
-variable "eventgrid_publish_endpoint" {
-  type        = string
-  description = "Event Grid publish endpoint, e.g. https://<topic>.<region>-1.eventgrid.azure.net/api/events"
+provider "azurerm" {
+  subscription_id = var.subscription_id
+
+  features {}
+}
+
+variable "subscription_id" {
+  type = string
 }
 
 variable "order_id" {
   type        = string
   description = "Sample order id to include in event payload"
+}
+
+data "azurerm_client_config" "current" {
+}
+
+resource "azurerm_resource_group" "example" {
+  name     = "example-resources"
+  location = "West Europe"
+}
+
+resource "azurerm_eventgrid_topic" "example" {
+  name                = "my-eventgrid-topic"
+  location            = azurerm_resource_group.example.location
+  resource_group_name = azurerm_resource_group.example.name
+
+  tags = {
+    environment = "Production"
+  }
+}
+
+resource "azurerm_role_assignment" "eventgrid_data_sender" {
+  scope                = azurerm_eventgrid_topic.example.id
+  role_definition_name = "EventGrid Data Sender"
+  principal_id         = data.azurerm_client_config.current.object_id
 }
 
 resource "terraform_data" "example" {
@@ -41,18 +74,20 @@ resource "terraform_data" "example" {
   lifecycle {
     action_trigger {
       events  = [after_create, after_update]
-      actions = [action.azureactions_eventgrid_publish_event.example]
+      actions = [action.azureactions_eventgrid_publish_cloudevent.example]
     }
   }
+
+  depends_on = [azurerm_role_assignment.eventgrid_data_sender]
 }
 
-action "azureactions_eventgrid_publish_event" "example" {
+action "azureactions_eventgrid_publish_cloudevent" "example" {
   config {
-    endpoint_url = var.eventgrid_publish_endpoint
+    endpoint_url = azurerm_eventgrid_topic.example.endpoint
 
     cloud_event {
-      source          = "terraform-provider-azureactions/examples"
-      type            = "com.webedmj.order.updated"
+      source          = "example/orders"
+      type            = "example.order.updated"
       subject         = "orders/${var.order_id}"
       time            = timestamp()
       datacontenttype = "application/json"
@@ -61,7 +96,7 @@ action "azureactions_eventgrid_publish_event" "example" {
         status  = "processed"
       }
       cloud_event_extensions = {
-        environment = "example"
+        environment = "dev"
       }
     }
   }
@@ -79,7 +114,7 @@ action "azureactions_eventgrid_publish_event" "example" {
 
 - `access_key` (String) Event Grid access key, required when `auth_method` is `access_key`. Provide via a Terraform sensitive variable.
 - `auth_method` (String) Authentication method. Accepted values: `default_azure_credential`, `access_key`, `sas_token`. Defaults to `default_azure_credential` when omitted.
-- `cloud_event` (Block List) CloudEvent blocks to publish. Use repeated blocks or dynamic blocks. The provider encodes these into a CloudEvents JSON batch payload. (see [below for nested schema](#nestedblock--cloud_event))
+- `cloud_event` (Block List) CloudEvent blocks to publish. Use repeated blocks or dynamic blocks. The provider encodes these into a CloudEvents JSON batch payload. Event Grid resources configured for the legacy EventGridEvent schema will reject these payloads. (see [below for nested schema](#nestedblock--cloud_event))
 - `content_type` (String) HTTP content type. Defaults to `application/cloudevents-batch+json`.
 - `sas_token` (String) Event Grid SAS token, required when `auth_method` is `sas_token`. Provide via a Terraform sensitive variable.
 - `timeout_seconds` (Number) Request timeout in seconds. Defaults to 30. Must be >= 1.
