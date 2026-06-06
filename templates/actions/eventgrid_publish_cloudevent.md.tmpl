@@ -13,4 +13,6 @@ description: |-
 
 {{ tffile "examples/actions/eventgrid_publish_cloudevent/action.tf" }}
 
+When publishing to an Event Grid domain endpoint, Event Grid uses CloudEvent `source` to determine the target domain topic by default. Set `source` to the domain topic name (or configure custom input mapping on the domain).
+
 {{ .SchemaMarkdown | trimspace }}

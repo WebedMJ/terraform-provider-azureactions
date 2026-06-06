@@ -58,7 +58,7 @@ func TestAccPublishEventAction_InvalidPayload(t *testing.T) {
 			},
 			{
 				Config:      testAccPublishEventConfig(t, "v2", true),
-				ExpectError: regexp.MustCompile("(?i)cloud_event\\[0\\]\\.time must be an RFC3339 timestamp"),
+				ExpectError: regexp.MustCompile("(?i)cloud_event\\[0\\]\\.time must be RFC3339 format"),
 			},
 		},
 	})

@@ -283,6 +283,8 @@ action "azureactions_eventgrid_publish_cloudevent" "publish" {
 
 This action only publishes CloudEvents payloads. The target Event Grid topic or domain must be configured to accept CloudEvents input schema, for example `input_schema = "CloudEventSchemaV1_0"` on `azurerm_eventgrid_topic` or `azurerm_eventgrid_domain`.
 
+When publishing to an Event Grid domain endpoint, Event Grid uses CloudEvent `source` to determine the domain topic by default. Set `source` to the domain topic name (or configure custom input mapping on the domain).
+
 `cloud_event` supports repeated blocks and dynamic blocks, so you can generate multiple events with `for_each` without building a full JSON array string manually.
 
 `id` is optional. If omitted, the provider generates `terraform-<timestamp>` automatically.
