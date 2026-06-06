@@ -256,6 +256,37 @@ action "azureactions_devops_pipeline_trigger" "deploy_dac" {
 }
 ```
 
+### Azure Event Grid Publish Event
+
+```hcl
+action "azureactions_eventgrid_publish_event" "publish" {
+  config {
+    endpoint_url = "https://mytopic.eastus-1.eventgrid.azure.net/api/events"
+
+    # auth_method is optional and defaults to "default_azure_credential"
+    cloud_event {
+      source  = "/terraform-provider-azureactions"
+      type    = "com.webedmj.order.created"
+      subject = "orders/123"
+      time    = timestamp()
+      data = {
+        orderId = "123"
+        status  = "created"
+      }
+      cloud_event_extensions = {
+        tenant = "sample"
+      }
+    }
+  }
+}
+```
+
+`cloud_event` supports repeated blocks and dynamic blocks, so you can generate multiple events with `for_each` without building a full JSON array string manually.
+
+`id` is optional. If omitted, the provider generates `terraform-<timestamp>` automatically.
+
+For key or SAS authentication, set `auth_method = "access_key"` with `access_key`, or `auth_method = "sas_token"` with `sas_token`.
+
 ### Action Result Behavior
 
 Terraform actions in the current Terraform/plugin framework model do not expose provider-defined expression outputs (for example `run_id`, `state`, or `result`) that can be referenced from `output`, `local`, or other expression contexts.
@@ -278,6 +309,10 @@ This provider supports various Azure actions:
 ### Azure DevOps
 
 - **`azureactions_devops_pipeline_trigger`**: Triggers an Azure DevOps pipeline run. Supports Personal Access Token (PAT) and DefaultAzureCredential-backed Microsoft Entra authentication (with `service_principal` retained as a backwards-compatible alias). Supports branch overrides, pipeline variables, template parameters, stage skipping, and optional waiting for completion.
+
+### Azure Event Grid
+
+- **`azureactions_eventgrid_publish_event`**: Publishes CloudEvents batch payloads to an Event Grid publish endpoint over HTTP. Supports `default_azure_credential` (default), `access_key`, and `sas_token` authentication modes.
 
 ### Planned Actions
 

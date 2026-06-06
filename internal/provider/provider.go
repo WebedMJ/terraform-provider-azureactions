@@ -12,6 +12,7 @@ import (
 	"github.com/WebedMJ/terraform-provider-azureactions/internal/sdk"
 	"github.com/WebedMJ/terraform-provider-azureactions/internal/services/automation"
 	"github.com/WebedMJ/terraform-provider-azureactions/internal/services/devops"
+	"github.com/WebedMJ/terraform-provider-azureactions/internal/services/eventgrid"
 	"github.com/hashicorp/terraform-plugin-framework/action"
 	"github.com/hashicorp/terraform-plugin-framework/datasource"
 	"github.com/hashicorp/terraform-plugin-framework/provider"
@@ -166,6 +167,7 @@ func SupportedServices() []sdk.ServiceRegistration {
 	return []sdk.ServiceRegistration{
 		automation.Registration{},
 		devops.Registration{},
+		eventgrid.Registration{},
 	}
 }
 

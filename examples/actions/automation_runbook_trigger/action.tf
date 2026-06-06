@@ -15,19 +15,6 @@ variable "subscription_id" {
   type = string
 }
 
-# variable "client_id" {
-#   type = string
-# }
-
-# variable "client_secret" {
-#   type      = string
-#   sensitive = true
-# }
-
-# variable "tenant_id" {
-#   type = string
-# }
-
 variable "automation_account_name" {
   type        = string
   description = "Name of the Azure Automation Account"
@@ -65,9 +52,4 @@ action "azureactions_automation_runbook_trigger" "example" {
       testparam = "My test value"
     }
   }
-}
-
-output "action_invoked" {
-  value       = "Automation runbook trigger action configured"
-  description = "Indicates that the automation runbook trigger action has been set up"
 }
