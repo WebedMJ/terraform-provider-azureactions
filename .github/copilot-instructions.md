@@ -17,6 +17,7 @@ The provider is built with the [terraform-plugin-framework](https://github.com/h
 │   ├── acctest/          # Shared acceptance test helpers (build tag: acceptance)
 │   └── services/         # One sub-package per Azure service area
 │       ├── automation/   # Azure Automation actions
+│       ├── eventgrid/    # Azure Event Grid actions
 │       └── devops/       # Azure DevOps actions
 ├── examples/             # Example Terraform configurations (used by tfplugindocs)
 ├── tools/                # go generate directive for tfplugindocs
@@ -339,6 +340,17 @@ The Makefile `fmt` target uses `gofmt -s -w .` (works on both platforms when gof
 - Add an `examples/actions/<service>_<name>/action.tf` example for every action (used by tfplugindocs)
 - Run `make generate` after schema changes to update `docs/`
 - Documentation is generated from schema `MarkdownDescription` + example `.tf` files — keep both accurate
+
+## Session Learnings (2026-06)
+
+- Event Grid action naming: use `azureactions_eventgrid_publish_cloudevent` (not `...publish_event`) to make supported payload schema explicit.
+- Event Grid payload support: this provider action publishes **CloudEvents only**. Document this clearly in schema descriptions, README, examples, and generated docs.
+- Event Grid resource schema requirement: target topics/domains must accept CloudEvents input schema (for example `input_schema = "CloudEventSchemaV1_0"` in `azurerm_eventgrid_topic`/`azurerm_eventgrid_domain`).
+- Event Grid domain nuance: when publishing CloudEvents to a **domain endpoint**, Azure uses CloudEvent `source` as the target domain topic by default (unless domain input mapping is customized).
+- Example guidance: for non-domain topics, `source` should be a stable producer identifier; for domain endpoints, `source` should be the domain topic selector.
+- tfplugindocs reliability: generate docs through `go generate ./tools`, which now uses `tools/cmd/gendocs` to run from repository root. This avoids missing action docs seen with certain relative-path invocations.
+- Action docs templates: keep explicit templates under `templates/actions/` so Example Usage is always rendered, instead of relying on auto-detected examples.
+- Test/doc consistency: acceptance test error regexes should match implementation wording exactly to avoid false failures.
 
 ## Authentication Reference
 
