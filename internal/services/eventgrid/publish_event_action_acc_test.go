@@ -116,8 +116,8 @@ resource "terraform_data" "trigger" {
 		acctest.ProviderConfigFromEnv(t),
 		acctest.Q(acctest.Env(t, "ACC_TEST_EVENTGRID_ENDPOINT")),
 		acctest.Q("tests/"+marker),
-		acchtest.Q(timeValue),
-		acchtest.Q(marker),
+		acctest.Q(timeValue),
+		acctest.Q(marker),
 		acctest.Q(marker),
 	)
 }
