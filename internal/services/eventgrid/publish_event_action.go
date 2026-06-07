@@ -390,7 +390,7 @@ func buildCloudEventsPayload(ctx context.Context, cloudEvents types.List) ([]byt
 				}
 
 				if !cloudEventExtNameRegexp.MatchString(key) {
-					return nil, 0, fmt.Errorf("cloud_event[%d].cloud_event_extensions: extension attribute name %q must consist only of lowercase letters (a-z) and digits (0-9)", i, key)
+					return nil, 0, fmt.Errorf("cloud_event[%d].cloud_event_extensions: extension attribute name %q must start with a lowercase letter, contain only lowercase letters (a-z) and digits (0-9), and be 1-20 characters long", i, key)
 				}
 
 				if key == "specversion" || key == "id" || key == "source" || key == "type" || key == "subject" || key == "time" || key == "datacontenttype" || key == "data" || key == "data_base64" {
