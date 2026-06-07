@@ -707,3 +707,173 @@ func TestPublishEventAction_ResolveAuthMethod_Default(t *testing.T) {
 		t.Fatalf("expected default auth method %q, got %q", authMethodDAC, got)
 	}
 }
+
+func TestPublishEventAction_Invoke_CloudEventExtensions_Valid(t *testing.T) {
+	t.Parallel()
+
+	var body []byte
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ = io.ReadAll(r.Body)
+		w.WriteHeader(http.StatusAccepted)
+		_, _ = w.Write([]byte(`{"status":"accepted"}`))
+	}))
+	defer server.Close()
+
+	a := newPublishAction(server, &mockEventGridTokenCredential{token: "mock-token"})
+	id := "evt-ext-1"
+	cfg := buildPublishConfig(t,
+		"https://example.eventgrid.azure.net/api/events",
+		nil, nil, nil,
+		[]testCloudEvent{
+			{
+				ID:     &id,
+				Source: "/tests/eventgrid",
+				Type:   "com.webedmj.event.created",
+				CloudEventExtensions: map[string]string{
+					"tenantid": "abc123",
+					"ext1":     "value1",
+				},
+			},
+		},
+		nil, nil,
+	)
+	resp, _ := invokePublishAction(t, a, cfg)
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("expected no error for valid extension keys, got: %v", resp.Diagnostics)
+	}
+
+	var payload []map[string]any
+	if err := json.Unmarshal(body, &payload); err != nil {
+		t.Fatalf("expected valid JSON payload, got error: %v", err)
+	}
+	if payload[0]["tenantid"] != "abc123" {
+		t.Errorf("expected extension key %q with value %q, got %v", "tenantid", "abc123", payload[0]["tenantid"])
+	}
+	if payload[0]["ext1"] != "value1" {
+		t.Errorf("expected extension key %q with value %q, got %v", "ext1", "value1", payload[0]["ext1"])
+	}
+}
+
+func TestPublishEventAction_Invoke_CloudEventExtensions_InvalidKey_UpperCase(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer server.Close()
+
+	a := newPublishAction(server, &mockEventGridTokenCredential{token: "mock-token"})
+	id := "evt-ext-2"
+	cfg := buildPublishConfig(t,
+		"https://example.eventgrid.azure.net/api/events",
+		nil, nil, nil,
+		[]testCloudEvent{
+			{
+				ID:     &id,
+				Source: "/tests/eventgrid",
+				Type:   "com.webedmj.event.created",
+				CloudEventExtensions: map[string]string{
+					"TenantID": "abc123",
+				},
+			},
+		},
+		nil, nil,
+	)
+	resp, _ := invokePublishAction(t, a, cfg)
+	if !resp.Diagnostics.HasError() {
+		t.Fatal("expected diagnostics error for uppercase extension key, got none")
+	}
+}
+
+func TestPublishEventAction_Invoke_CloudEventExtensions_InvalidKey_Hyphen(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer server.Close()
+
+	a := newPublishAction(server, &mockEventGridTokenCredential{token: "mock-token"})
+	id := "evt-ext-3"
+	cfg := buildPublishConfig(t,
+		"https://example.eventgrid.azure.net/api/events",
+		nil, nil, nil,
+		[]testCloudEvent{
+			{
+				ID:     &id,
+				Source: "/tests/eventgrid",
+				Type:   "com.webedmj.event.created",
+				CloudEventExtensions: map[string]string{
+					"my-ext": "value",
+				},
+			},
+		},
+		nil, nil,
+	)
+	resp, _ := invokePublishAction(t, a, cfg)
+	if !resp.Diagnostics.HasError() {
+		t.Fatal("expected diagnostics error for hyphenated extension key, got none")
+	}
+}
+
+func TestPublishEventAction_Invoke_CloudEventExtensions_InvalidKey_Whitespace(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer server.Close()
+
+	a := newPublishAction(server, &mockEventGridTokenCredential{token: "mock-token"})
+	id := "evt-ext-4"
+	cfg := buildPublishConfig(t,
+		"https://example.eventgrid.azure.net/api/events",
+		nil, nil, nil,
+		[]testCloudEvent{
+			{
+				ID:     &id,
+				Source: "/tests/eventgrid",
+				Type:   "com.webedmj.event.created",
+				CloudEventExtensions: map[string]string{
+					" tenant ": "abc123",
+				},
+			},
+		},
+		nil, nil,
+	)
+	resp, _ := invokePublishAction(t, a, cfg)
+	if !resp.Diagnostics.HasError() {
+		t.Fatal("expected diagnostics error for whitespace-padded extension key, got none")
+	}
+}
+
+func TestPublishEventAction_Invoke_CloudEventExtensions_ReservedKey(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer server.Close()
+
+	a := newPublishAction(server, &mockEventGridTokenCredential{token: "mock-token"})
+	id := "evt-ext-5"
+	cfg := buildPublishConfig(t,
+		"https://example.eventgrid.azure.net/api/events",
+		nil, nil, nil,
+		[]testCloudEvent{
+			{
+				ID:     &id,
+				Source: "/tests/eventgrid",
+				Type:   "com.webedmj.event.created",
+				CloudEventExtensions: map[string]string{
+					"specversion": "1.0",
+				},
+			},
+		},
+		nil, nil,
+	)
+	resp, _ := invokePublishAction(t, a, cfg)
+	if !resp.Diagnostics.HasError() {
+		t.Fatal("expected diagnostics error for reserved extension key, got none")
+	}
+}
