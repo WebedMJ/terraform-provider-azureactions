@@ -351,6 +351,8 @@ The Makefile `fmt` target uses `gofmt -s -w .` (works on both platforms when gof
 - tfplugindocs reliability: generate docs through `go generate ./tools`, which now uses `tools/cmd/gendocs` to run from repository root. This avoids missing action docs seen with certain relative-path invocations.
 - Action docs templates: keep explicit templates under `templates/actions/` so Example Usage is always rendered, instead of relying on auto-detected examples.
 - Test/doc consistency: acceptance test error regexes should match implementation wording exactly to avoid false failures.
+- Generated action docs can include nested block HTML anchors from `.SchemaMarkdown` (for example `<a id="nestedblock--..."></a>`), which trigger markdownlint `MD033` and adjacent heading spacing `MD022` in strict setups.
+- For this repository, handle those generated schema lint conflicts with **template-scoped** markdownlint inline directives around `{{ .SchemaMarkdown | trimspace }}` in action templates, not by directly editing files under `docs/`.
 
 ## Authentication Reference
 
