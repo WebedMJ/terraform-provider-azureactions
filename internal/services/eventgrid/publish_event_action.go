@@ -19,8 +19,10 @@ import (
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
 	"github.com/WebedMJ/terraform-provider-azureactions/internal/sdk"
+	"github.com/hashicorp/terraform-plugin-framework-validators/listvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/action"
 	"github.com/hashicorp/terraform-plugin-framework/action/schema"
+	"github.com/hashicorp/terraform-plugin-framework/schema/validator"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 )
 
@@ -116,7 +118,10 @@ func (p *PublishEventAction) Schema(_ context.Context, _ action.SchemaRequest, r
 		},
 		Blocks: map[string]schema.Block{
 			"cloud_event": schema.ListNestedBlock{
-				MarkdownDescription: "CloudEvent blocks to publish. Use repeated blocks or dynamic blocks. The provider encodes these into a CloudEvents JSON batch payload. Event Grid resources configured for the legacy EventGridEvent schema will reject these payloads.",
+				Validators: []validator.List{
+					listvalidator.SizeAtLeast(1),
+				},
+				MarkdownDescription: "CloudEvent blocks to publish. At least one block is required. Use repeated blocks or dynamic blocks. The provider encodes these into a CloudEvents JSON batch payload. Event Grid resources configured for the legacy EventGridEvent schema will reject these payloads.",
 				NestedObject: schema.NestedBlockObject{
 					Attributes: map[string]schema.Attribute{
 						"specversion": schema.StringAttribute{

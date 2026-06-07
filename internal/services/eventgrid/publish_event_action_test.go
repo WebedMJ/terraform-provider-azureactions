@@ -367,9 +367,13 @@ func TestPublishEventAction_Invoke_DefaultAuthMethod_DACSuccess(t *testing.T) {
 func TestPublishEventAction_Invoke_DefaultIDWhenOmitted(t *testing.T) {
 	t.Parallel()
 
+	var mu sync.Mutex
 	var body []byte
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, _ = io.ReadAll(r.Body)
+		b, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		body = b
+		mu.Unlock()
 		w.WriteHeader(http.StatusAccepted)
 		_, _ = w.Write([]byte(`{"status":"accepted"}`))
 	}))
@@ -388,8 +392,13 @@ func TestPublishEventAction_Invoke_DefaultIDWhenOmitted(t *testing.T) {
 		t.Fatalf("expected no diagnostics, got: %v", resp.Diagnostics)
 	}
 
+	mu.Lock()
+	bodyCopy := make([]byte, len(body))
+	copy(bodyCopy, body)
+	mu.Unlock()
+
 	var payload []map[string]any
-	if err := json.Unmarshal(body, &payload); err != nil {
+	if err := json.Unmarshal(bodyCopy, &payload); err != nil {
 		t.Fatalf("expected valid JSON payload, got error: %v", err)
 	}
 	id, ok := payload[0]["id"].(string)
@@ -739,9 +748,13 @@ func TestPublishEventAction_ResolveAuthMethod_Default(t *testing.T) {
 func TestPublishEventAction_Invoke_CloudEventExtensions_Valid(t *testing.T) {
 	t.Parallel()
 
+	var mu sync.Mutex
 	var body []byte
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		body, _ = io.ReadAll(r.Body)
+		b, _ := io.ReadAll(r.Body)
+		mu.Lock()
+		body = b
+		mu.Unlock()
 		w.WriteHeader(http.StatusAccepted)
 		_, _ = w.Write([]byte(`{"status":"accepted"}`))
 	}))
@@ -770,8 +783,13 @@ func TestPublishEventAction_Invoke_CloudEventExtensions_Valid(t *testing.T) {
 		t.Fatalf("expected no error for valid extension keys, got: %v", resp.Diagnostics)
 	}
 
+	mu.Lock()
+	bodyCopy := make([]byte, len(body))
+	copy(bodyCopy, body)
+	mu.Unlock()
+
 	var payload []map[string]any
-	if err := json.Unmarshal(body, &payload); err != nil {
+	if err := json.Unmarshal(bodyCopy, &payload); err != nil {
 		t.Fatalf("expected valid JSON payload, got error: %v", err)
 	}
 	if payload[0]["tenantid"] != "abc123" {

@@ -23,7 +23,6 @@ import (
 //
 // Required environment variables:
 //
-//	AZURE_SUBSCRIPTION_ID (or ARM_SUBSCRIPTION_ID alias)
 //	ACC_TEST_EVENTGRID_ENDPOINT
 func TestAccPublishEventAction_Basic(t *testing.T) {
 	if os.Getenv("TF_ACC") == "" {
