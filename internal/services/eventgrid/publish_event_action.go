@@ -419,7 +419,7 @@ func requiredStringValue(value types.String, field string) (string, error) {
 }
 
 func defaultEventID(index int) string {
-	return fmt.Sprintf("terraform-%s-%d", time.Now().UTC().Format(time.RFC3339Nano), index)
+	return fmt.Sprintf("terraform-%d-%d", time.Now().UTC().UnixNano(), index)
 }
 
 func optionalStringValue(value types.String) string {
