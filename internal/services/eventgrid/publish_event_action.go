@@ -227,8 +227,15 @@ func (p *PublishEventAction) Invoke(ctx context.Context, request action.InvokeRe
 		return
 	}
 
+	endpointLog := endpointURL
+	if u, err := url.Parse(endpointLog); err == nil {
+		u.RawQuery = ""
+		u.Fragment = ""
+		endpointLog = u.String()
+	}
+
 	response.SendProgress(action.InvokeProgressEvent{
-		Message: fmt.Sprintf("Publishing %d CloudEvents to Event Grid endpoint %s using auth_method=%s", eventCount, endpointURL, authMethod),
+		Message: fmt.Sprintf("Publishing %d CloudEvents to Event Grid endpoint %s using auth_method=%s", eventCount, endpointLog, authMethod),
 	})
 
 	publishCtx, cancel := context.WithTimeout(ctx, time.Duration(timeoutSeconds)*time.Second)
