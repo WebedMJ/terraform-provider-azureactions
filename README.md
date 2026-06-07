@@ -287,7 +287,7 @@ When publishing to an Event Grid domain endpoint, Event Grid uses CloudEvent `so
 
 `cloud_event` supports repeated blocks and dynamic blocks, so you can generate multiple events with `for_each` without building a full JSON array string manually.
 
-`id` is optional. If omitted, the provider generates `terraform-<timestamp>` automatically.
+`id` is optional. If omitted, the provider generates `terraform-<uuid>` automatically.
 
 For key or SAS authentication, set `auth_method = "access_key"` with `access_key`, or `auth_method = "sas_token"` with `sas_token`.
 
