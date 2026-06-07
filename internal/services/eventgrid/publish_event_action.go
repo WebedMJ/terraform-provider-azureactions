@@ -53,9 +53,10 @@ type PublishEventAction struct {
 var _ sdk.Action = &PublishEventAction{}
 
 // cloudEventExtNameRegexp matches valid CloudEvents extension attribute names:
-// only lowercase letters (a-z) and digits (0-9), as required by the CloudEvents v1.0 spec
-// (https://github.com/cloudevents/spec/blob/v1.0.2/cloudevents/spec.md#attribute-naming-convention).
-var cloudEventExtNameRegexp = regexp.MustCompile(`^[a-z0-9]+$`)
+// must start with a lowercase letter, contain only lowercase letters (a-z) and digits (0-9),
+// and be 1-20 characters long, as required by the CloudEvents v1.0 spec
+// (https://github.com/cloudevents/spec/blob/v1.0.2/spec.md#attributes).
+var cloudEventExtNameRegexp = regexp.MustCompile(`^[a-z][a-z0-9]{0,19}$`)
 
 func NewPublishEventAction() action.Action {
 	return &PublishEventAction{}
