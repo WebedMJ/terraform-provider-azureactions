@@ -9,9 +9,11 @@ package automation
 import (
 	"context"
 	"encoding/json"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -188,8 +190,9 @@ func newJobMuxPUT(statusCode int, body []byte) *http.ServeMux {
 
 // newJobMuxWithStatus returns a mux that:
 //   - Responds to PUT (create job) with a "New" job
-//   - Responds to GET (poll) with the supplied final status
+//   - Responds to GET (poll) with the supplied final status after one "Running" response
 func newJobMuxWithStatus(finalStatus string) *http.ServeMux {
+	var mu sync.Mutex
 	callCount := 0
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -203,9 +206,12 @@ func newJobMuxWithStatus(finalStatus string) *http.ServeMux {
 			w.WriteHeader(http.StatusCreated)
 			_, _ = w.Write(jobResponse("New"))
 		case http.MethodGet:
+			mu.Lock()
 			callCount++
+			cnt := callCount
+			mu.Unlock()
 			// Return "Running" on first poll, final status on subsequent
-			if callCount == 1 {
+			if cnt == 1 {
 				w.WriteHeader(http.StatusOK)
 				_, _ = w.Write(jobResponse("Running"))
 			} else {
@@ -384,6 +390,200 @@ func TestRunbookTriggerAction_Configure_NilProviderData(t *testing.T) {
 
 	if resp.Diagnostics.HasError() {
 		t.Errorf("unexpected diagnostics: %v", resp.Diagnostics)
+	}
+}
+
+// TestRunbookTriggerAction_Invoke_JobSuspended tests that a suspended runbook
+// job surfaces an error diagnostic.
+func TestRunbookTriggerAction_Invoke_JobSuspended(t *testing.T) {
+	t.Parallel()
+
+	mux := newJobMuxWithStatus("Suspended")
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	a := newTestAction(server.URL)
+	waitTrue := true
+	timeoutMins := int64(1)
+	cfg := buildConfig(t, "test-account", "test-rg", "TestRunbook", &waitTrue, &timeoutMins)
+	resp, _ := invokeAction(t, a, cfg)
+
+	if !resp.Diagnostics.HasError() {
+		t.Error("expected diagnostics error for suspended job, got none")
+	}
+}
+
+// TestRunbookTriggerAction_Invoke_MissingSubscriptionID tests that Invoke fails
+// with a clear diagnostic when the provider client has no subscription ID.
+func TestRunbookTriggerAction_Invoke_MissingSubscriptionID(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer server.Close()
+
+	clientNoSub := newTestClient(server.URL)
+	clientNoSub.Account.SubscriptionID = ""
+
+	a := &RunbookTriggerAction{pollInterval: 50 * time.Millisecond}
+	req := action.ConfigureRequest{ProviderData: clientNoSub}
+	cfgResp := &action.ConfigureResponse{}
+	a.Configure(context.Background(), req, cfgResp)
+
+	cfg := buildConfig(t, "test-account", "test-rg", "TestRunbook", nil, nil)
+	resp, _ := invokeAction(t, a, cfg)
+
+	if !resp.Diagnostics.HasError() {
+		t.Error("expected diagnostics error for missing subscription_id, got none")
+	}
+}
+
+// TestRunbookTriggerAction_Invoke_InvalidTimeout tests that a timeout_minutes
+// value less than 1 surfaces an error diagnostic.
+func TestRunbookTriggerAction_Invoke_InvalidTimeout(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(newJobMuxPUT(http.StatusCreated, jobResponse("New")))
+	defer server.Close()
+
+	a := newTestAction(server.URL)
+	waitTrue := true
+	zeroTimeout := int64(0)
+	cfg := buildConfig(t, "test-account", "test-rg", "TestRunbook", &waitTrue, &zeroTimeout)
+	resp, _ := invokeAction(t, a, cfg)
+
+	if !resp.Diagnostics.HasError() {
+		t.Error("expected diagnostics error for timeout_minutes=0, got none")
+	}
+}
+
+// TestRunbookTriggerAction_Invoke_PollError tests that an API error returned
+// by the status GET endpoint during polling surfaces as a diagnostic error.
+func TestRunbookTriggerAction_Invoke_PollError(t *testing.T) {
+	t.Parallel()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(r.URL.Path, "/jobs/") {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		switch r.Method {
+		case http.MethodPut:
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write(jobResponse("New"))
+		case http.MethodGet:
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"error":{"code":"InternalServerError","message":"transient error"}}`))
+		default:
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	a := newTestAction(server.URL)
+	waitTrue := true
+	timeoutMins := int64(1)
+	cfg := buildConfig(t, "test-account", "test-rg", "TestRunbook", &waitTrue, &timeoutMins)
+	resp, _ := invokeAction(t, a, cfg)
+
+	if !resp.Diagnostics.HasError() {
+		t.Error("expected diagnostics error for poll GET failure, got none")
+	}
+}
+
+// TestRunbookTriggerAction_Invoke_WithParameters tests that runbook parameters
+// are serialised and included in the job creation request body.
+func TestRunbookTriggerAction_Invoke_WithParameters(t *testing.T) {
+	t.Parallel()
+
+	var capturedBody []byte
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if r.Method == http.MethodPut && strings.Contains(r.URL.Path, "/jobs/") {
+			var err error
+			capturedBody, err = io.ReadAll(r.Body)
+			if err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+			w.Header().Set("Content-Type", "application/json")
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write(jobResponse("New"))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	a := newTestAction(server.URL)
+
+	ctx := context.Background()
+	schemaResp := &action.SchemaResponse{}
+	a.Schema(ctx, action.SchemaRequest{}, schemaResp)
+	schema := schemaResp.Schema
+	rawValue := tftypes.NewValue(schema.Type().TerraformType(ctx), map[string]tftypes.Value{
+		"automation_account_name": tftypes.NewValue(tftypes.String, "test-account"),
+		"resource_group_name":     tftypes.NewValue(tftypes.String, "test-rg"),
+		"runbook_name":            tftypes.NewValue(tftypes.String, "TestRunbook"),
+		"parameters": tftypes.NewValue(tftypes.Map{ElementType: tftypes.String}, map[string]tftypes.Value{
+			"Env":    tftypes.NewValue(tftypes.String, "test"),
+			"Source": tftypes.NewValue(tftypes.String, "terraform"),
+		}),
+		"wait_for_completion": tftypes.NewValue(tftypes.Bool, nil),
+		"timeout_minutes":     tftypes.NewValue(tftypes.Number, nil),
+	})
+	cfg := tfsdk.Config{Raw: rawValue, Schema: schema}
+
+	resp, _ := invokeAction(t, a, cfg)
+
+	if resp.Diagnostics.HasError() {
+		t.Errorf("expected no diagnostics, got: %v", resp.Diagnostics)
+	}
+	if capturedBody == nil {
+		t.Fatal("expected PUT request body to be captured")
+	}
+	body := string(capturedBody)
+	if !strings.Contains(body, `"Env"`) {
+		t.Errorf("expected parameter key 'Env' in request body, got: %s", body)
+	}
+	if !strings.Contains(body, `"terraform"`) {
+		t.Errorf("expected parameter value 'terraform' in request body, got: %s", body)
+	}
+}
+
+// TestRunbookTriggerAction_Invoke_PollTimeout tests that the action surfaces a
+// diagnostic error when the polling context expires before the job completes.
+func TestRunbookTriggerAction_Invoke_PollTimeout(t *testing.T) {
+	t.Parallel()
+
+	// Server always responds "Running" — job never completes.
+	server := httptest.NewServer(newJobMuxWithStatus("Running"))
+	defer server.Close()
+
+	a := newTestAction(server.URL)
+	waitTrue := true
+	timeoutMins := int64(1) // minimum valid; parent context expires well before this
+	cfg := buildConfig(t, "test-account", "test-rg", "TestRunbook", &waitTrue, &timeoutMins)
+
+	// A 300ms outer context is inherited by the action's internal WithTimeout
+	// (min(300ms, 1min) → 300ms). With a 50ms poll interval this gives ~5 polls
+	// before the deadline, exercising the ctx.Done() branch.
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+
+	var progressMessages []string
+	resp := &action.InvokeResponse{
+		SendProgress: func(e action.InvokeProgressEvent) {
+			progressMessages = append(progressMessages, e.Message)
+		},
+	}
+	a.Invoke(ctx, action.InvokeRequest{Config: cfg}, resp)
+
+	if !resp.Diagnostics.HasError() {
+		t.Error("expected diagnostics error for poll timeout, got none")
 	}
 }
 

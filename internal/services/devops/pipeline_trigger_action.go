@@ -32,10 +32,10 @@ const (
 	authMethodPAT           = "pat"
 	authMethodSP            = "service_principal"
 	authMethodDAC           = "default_azure_credential"
-	defaultPollSeconds      = 15
-	httpClientTimeout       = 30 * time.Second // timeout for individual DevOps API calls
+	defaultPollSeconds      = 10
 	httpDialTimeout         = 10 * time.Second // timeout for establishing connection
 	httpTLSHandshakeTimeout = 10 * time.Second
+	httpRequestTimeout      = 30 * time.Second // per-request total timeout via context
 )
 
 // PipelineTriggerAction implements sdk.Action for triggering an Azure DevOps
@@ -380,15 +380,14 @@ func (p *PipelineTriggerAction) buildRequestBody(ctx context.Context, model Pipe
 
 // getHTTPClient returns the HTTP client to use for DevOps API calls.
 // Tests can inject a custom client via the httpClient field.
-// If no custom client is set, returns a default client with explicit timeouts
-// to prevent indefinite hangs on network issues.
+// If no custom client is set, returns a default client with transport-level
+// timeouts. Request lifetime is controlled by the request context.
 func (p *PipelineTriggerAction) getHTTPClient() *http.Client {
 	if p.httpClient != nil {
 		return p.httpClient
 	}
-	// Return a client with explicit timeouts to avoid hangs on network failures
+	// Return a client with transport-level timeouts to avoid hangs on network failures.
 	return &http.Client{
-		Timeout: httpClientTimeout,
 		Transport: &http.Transport{
 			DialContext:         (&net.Dialer{Timeout: httpDialTimeout}).DialContext,
 			TLSHandshakeTimeout: httpTLSHandshakeTimeout,
@@ -405,7 +404,10 @@ func (p *PipelineTriggerAction) getHTTPClient() *http.Client {
 // triggerPipeline sends the POST request to the Azure DevOps Pipelines API
 // and returns the pipeline run response.
 func (p *PipelineTriggerAction) triggerPipeline(ctx context.Context, url, authHeader string, body []byte) (*pipelineRunResponse, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, bytes.NewReader(body))
+	reqCtx, cancel := context.WithTimeout(ctx, httpRequestTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, url, bytes.NewReader(body))
 	if err != nil {
 		return nil, fmt.Errorf("creating HTTP request: %w", err)
 	}
@@ -480,7 +482,10 @@ func (p *PipelineTriggerAction) waitForPipelineRun(ctx context.Context, response
 
 // getPipelineRun fetches the current state of a pipeline run.
 func (p *PipelineTriggerAction) getPipelineRun(ctx context.Context, statusURL, authHeader string) (*pipelineRunResponse, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, statusURL, nil)
+	reqCtx, cancel := context.WithTimeout(ctx, httpRequestTimeout)
+	defer cancel()
+
+	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, statusURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("creating status request: %w", err)
 	}

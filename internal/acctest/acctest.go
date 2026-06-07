@@ -64,6 +64,16 @@ func PreCheckDevOps(t *testing.T) {
 	)
 }
 
+// PreCheckEventGrid validates environment variables for Event Grid acceptance tests.
+// Note: subscription_id is not required for Event Grid data-plane calls; the AAD scope
+// https://eventgrid.azure.net/.default operates independently of Azure subscription context.
+func PreCheckEventGrid(t *testing.T) {
+	t.Helper()
+	RequireEnv(t,
+		"ACC_TEST_EVENTGRID_ENDPOINT",
+	)
+}
+
 // Env returns an environment variable and fails the test if it is missing.
 func Env(t *testing.T, key string) string {
 	t.Helper()

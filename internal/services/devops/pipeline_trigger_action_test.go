@@ -10,8 +10,11 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -19,6 +22,7 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
 	"github.com/WebedMJ/terraform-provider-azureactions/internal/clients"
 	"github.com/WebedMJ/terraform-provider-azureactions/internal/sdk"
+	"github.com/WebedMJ/terraform-provider-azureactions/internal/services/testhelpers"
 	"github.com/hashicorp/go-azure-sdk/sdk/environments"
 	"github.com/hashicorp/terraform-plugin-framework/action"
 	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
@@ -95,7 +99,7 @@ func newDevOpsTestClient(organizationURL string) *clients.Client {
 func newTestAction(server *httptest.Server) *PipelineTriggerAction {
 	a := &PipelineTriggerAction{
 		httpClient: &http.Client{
-			Transport: &hostRewriteTransport{host: serverHost(server.URL)},
+			Transport: &testhelpers.HostRewriteTransport{Host: testhelpers.ServerHost(server.URL)},
 		},
 		pollInterval: 50 * time.Millisecond,
 	}
@@ -103,29 +107,6 @@ func newTestAction(server *httptest.Server) *PipelineTriggerAction {
 	resp := &action.ConfigureResponse{}
 	a.Configure(context.Background(), req, resp)
 	return a
-}
-
-// serverHost strips the "http://" prefix from a URL to get just "host:port".
-func serverHost(rawURL string) string {
-	const prefix = "http://"
-	if len(rawURL) > len(prefix) && rawURL[:len(prefix)] == prefix {
-		return rawURL[len(prefix):]
-	}
-	return rawURL
-}
-
-// hostRewriteTransport rewrites every outgoing request's host so it reaches
-// the test server, regardless of what URL the action code constructs.
-type hostRewriteTransport struct {
-	host string // e.g. "127.0.0.1:PORT"
-}
-
-func (t *hostRewriteTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	clone := req.Clone(req.Context())
-	clone.URL.Scheme = "http"
-	clone.URL.Host = t.host
-	clone.Host = t.host
-	return http.DefaultTransport.RoundTrip(clone)
 }
 
 // buildDevOpsConfig constructs a tfsdk.Config for the pipeline trigger action.
@@ -222,6 +203,7 @@ func pipelineRunJSON(id int, state, result string) []byte {
 // trigger and status endpoints.  On first GET it returns "inProgress"; on
 // subsequent GETs it returns the provided terminal state/result.
 func newPipelineMux(runState, runResult string) *http.ServeMux {
+	var mu sync.Mutex
 	callCount := 0
 	mux := http.NewServeMux()
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
@@ -231,8 +213,11 @@ func newPipelineMux(runState, runResult string) *http.ServeMux {
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write(pipelineRunJSON(42, "inProgress", "unknown"))
 		case http.MethodGet:
+			mu.Lock()
 			callCount++
-			if callCount == 1 {
+			cnt := callCount
+			mu.Unlock()
+			if cnt == 1 {
 				w.WriteHeader(http.StatusOK)
 				_, _ = w.Write(pipelineRunJSON(42, "inProgress", "unknown"))
 			} else {
@@ -450,27 +435,23 @@ func TestPipelineTriggerAction_Invoke_InvalidAuthMethod(t *testing.T) {
 	}
 }
 
-// TestPipelineTriggerAction_HTTPClient_Timeout tests that the HTTP client
-// enforces timeouts on slow/unresponsive servers. This prevents indefinite
+// TestPipelineTriggerAction_HTTPClient_Timeout tests that per-request context
+// timeouts are enforced on slow/unresponsive servers. This prevents indefinite
 // hangs during terraform apply.
 func TestPipelineTriggerAction_HTTPClient_Timeout(t *testing.T) {
 	t.Parallel()
 
-	// Create a server that delays responses beyond the client timeout
+	// Server delays every response well beyond the per-request timeout.
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Sleep longer than httpClientTimeout (30s) to trigger timeout
 		time.Sleep(2 * time.Second)
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer server.Close()
 
-	// Create an action with a very short custom timeout to simulate timeout behavior
-	// without waiting 30+ seconds in the test.
-	shortTimeoutClient := &http.Client{
-		Timeout: 100 * time.Millisecond,
-	}
+	// Inject a client that routes to the test server; no client-level Timeout
+	// is set — timeout is enforced via request context (httpRequestTimeout).
 	a := &PipelineTriggerAction{
-		httpClient:   shortTimeoutClient,
+		httpClient:   &http.Client{Transport: &testhelpers.HostRewriteTransport{Host: testhelpers.ServerHost(server.URL)}},
 		pollInterval: 50 * time.Millisecond,
 	}
 	req := action.ConfigureRequest{ProviderData: newDevOpsTestClient("https://dev.azure.com/myorg")}
@@ -479,23 +460,31 @@ func TestPipelineTriggerAction_HTTPClient_Timeout(t *testing.T) {
 
 	cfg := buildDevOpsConfig(t,
 		"my-project", 1,
-		authMethodPAT, "token", "",
+		authMethodPAT, "my-pat-token", "",
 		nil, nil,
 	)
 
-	// Rewrite the config to use our test server
-	invokResp, _ := invokeDevOpsAction(t, a, cfg)
+	// Use a context deadline shorter than the server delay to trigger the timeout.
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
 
-	// Expect a timeout error or network error due to client timeout
-	if !invokResp.Diagnostics.HasError() {
-		t.Log("Note: timeout test may not trigger if server response is fast enough. Consider this test advisory.")
+	var progress []string
+	invokeResp := &action.InvokeResponse{
+		SendProgress: func(e action.InvokeProgressEvent) {
+			progress = append(progress, e.Message)
+		},
+	}
+	a.Invoke(ctx, action.InvokeRequest{Config: cfg}, invokeResp)
+
+	if !invokeResp.Diagnostics.HasError() {
+		t.Error("expected diagnostics error due to context timeout, got none")
 	}
 }
 
-// TestPipelineTriggerAction_HTTPClient_HasExplicitTimeouts verifies that
-// the default HTTP client has explicit timeouts configured, preventing
-// indefinite hangs on network stalls.
-func TestPipelineTriggerAction_HTTPClient_HasExplicitTimeouts(t *testing.T) {
+// TestPipelineTriggerAction_HTTPClient_UsesContextTimeoutModel verifies that
+// the default HTTP client relies on request context for total timeout while
+// still configuring transport-level timeouts.
+func TestPipelineTriggerAction_HTTPClient_UsesContextTimeoutModel(t *testing.T) {
 	t.Parallel()
 
 	a := &PipelineTriggerAction{}
@@ -505,16 +494,12 @@ func TestPipelineTriggerAction_HTTPClient_HasExplicitTimeouts(t *testing.T) {
 		t.Fatal("getHTTPClient returned nil")
 	}
 
-	// Verify that the client has a timeout set (not zero)
-	if client.Timeout == 0 {
-		t.Error("HTTP client timeout is not set (Timeout == 0); should be 30 seconds")
+	// Total request timeout should be controlled by context, not a fixed client timeout.
+	if client.Timeout != 0 {
+		t.Errorf("HTTP client timeout is %v; expected 0 (context-driven timeout model)", client.Timeout)
 	}
 
-	if client.Timeout != httpClientTimeout {
-		t.Errorf("HTTP client timeout is %v; expected %v", client.Timeout, httpClientTimeout)
-	}
-
-	// Verify that Transport has dial timeout configured
+	// Verify that Transport is configured (including dial/TLS timeouts)
 	if client.Transport == nil {
 		t.Error("HTTP client Transport is nil; should have custom transport with timeouts")
 	}
@@ -583,7 +568,7 @@ func TestPipelineTriggerAction_Invoke_MissingProviderOrganizationURL(t *testing.
 
 	a := &PipelineTriggerAction{
 		httpClient: &http.Client{
-			Transport: &hostRewriteTransport{host: serverHost(server.URL)},
+			Transport: &testhelpers.HostRewriteTransport{Host: testhelpers.ServerHost(server.URL)},
 		},
 		pollInterval: 50 * time.Millisecond,
 	}
@@ -600,5 +585,218 @@ func TestPipelineTriggerAction_Invoke_MissingProviderOrganizationURL(t *testing.
 	resp, _ := invokeDevOpsAction(t, a, cfg)
 	if !resp.Diagnostics.HasError() {
 		t.Fatal("expected diagnostics error for missing provider organization_url, got none")
+	}
+}
+
+// TestPipelineTriggerAction_Invoke_InvalidPipelineID tests that a pipeline_id
+// of zero or negative surfaces a validation error diagnostic.
+func TestPipelineTriggerAction_Invoke_InvalidPipelineID(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer server.Close()
+
+	a := newTestAction(server)
+	cfg := buildDevOpsConfig(t,
+		"my-project", 0, // invalid: must be > 0
+		authMethodPAT, "my-pat-token", "",
+		nil, nil,
+	)
+	resp, _ := invokeDevOpsAction(t, a, cfg)
+
+	if !resp.Diagnostics.HasError() {
+		t.Error("expected diagnostics error for pipeline_id=0, got none")
+	}
+}
+
+// TestPipelineTriggerAction_Invoke_InvalidTimeout tests that a timeout_minutes
+// value less than 1 surfaces an error diagnostic.
+func TestPipelineTriggerAction_Invoke_InvalidTimeout(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(newPipelineMux("completed", "succeeded"))
+	defer server.Close()
+
+	a := newTestAction(server)
+	waitTrue := true
+	zeroTimeout := int64(0)
+	cfg := buildDevOpsConfig(t,
+		"my-project", 1,
+		authMethodPAT, "my-pat-token", "",
+		&waitTrue, &zeroTimeout,
+	)
+	resp, _ := invokeDevOpsAction(t, a, cfg)
+
+	if !resp.Diagnostics.HasError() {
+		t.Error("expected diagnostics error for timeout_minutes=0, got none")
+	}
+}
+
+// TestPipelineTriggerAction_Invoke_WaitForCompletion_Canceled tests that a
+// canceled pipeline run surfaces an error diagnostic.
+func TestPipelineTriggerAction_Invoke_WaitForCompletion_Canceled(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(newPipelineMux("completed", "canceled"))
+	defer server.Close()
+
+	a := newTestAction(server)
+	waitTrue := true
+	timeoutMins := int64(1)
+	cfg := buildDevOpsConfig(t,
+		"my-project", 1,
+		authMethodPAT, "my-pat", "",
+		&waitTrue, &timeoutMins,
+	)
+	resp, _ := invokeDevOpsAction(t, a, cfg)
+
+	if !resp.Diagnostics.HasError() {
+		t.Error("expected diagnostics error for canceled pipeline run, got none")
+	}
+}
+
+// TestPipelineTriggerAction_Invoke_WaitForCompletion_UnknownResult tests that
+// a run completing with an unrecognised result value surfaces an error.
+func TestPipelineTriggerAction_Invoke_WaitForCompletion_UnknownResult(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(newPipelineMux("completed", "partiallySucceeded"))
+	defer server.Close()
+
+	a := newTestAction(server)
+	waitTrue := true
+	timeoutMins := int64(1)
+	cfg := buildDevOpsConfig(t,
+		"my-project", 1,
+		authMethodPAT, "my-pat", "",
+		&waitTrue, &timeoutMins,
+	)
+	resp, _ := invokeDevOpsAction(t, a, cfg)
+
+	if !resp.Diagnostics.HasError() {
+		t.Error("expected diagnostics error for unrecognised pipeline run result, got none")
+	}
+}
+
+// TestPipelineTriggerAction_Invoke_PollTimeout tests that the action surfaces a
+// diagnostic error when the polling context expires before the run completes.
+func TestPipelineTriggerAction_Invoke_PollTimeout(t *testing.T) {
+	t.Parallel()
+
+	// Server always returns "inProgress" — run never completes.
+	server := httptest.NewServer(newPipelineMux("inProgress", "unknown"))
+	defer server.Close()
+
+	a := newTestAction(server)
+	waitTrue := true
+	timeoutMins := int64(1) // minimum valid; parent context expires well before this
+	cfg := buildDevOpsConfig(t,
+		"my-project", 1,
+		authMethodPAT, "my-pat-token", "",
+		&waitTrue, &timeoutMins,
+	)
+
+	// A 300ms outer context is inherited by the action's internal WithTimeout
+	// (min(300ms, 1min) → 300ms). With a 50ms poll interval this gives ~5 polls
+	// before the deadline, exercising the ctx.Done() branch.
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+
+	var progress []string
+	resp := &action.InvokeResponse{
+		SendProgress: func(e action.InvokeProgressEvent) {
+			progress = append(progress, e.Message)
+		},
+	}
+	a.Invoke(ctx, action.InvokeRequest{Config: cfg}, resp)
+
+	if !resp.Diagnostics.HasError() {
+		t.Error("expected diagnostics error for poll timeout, got none")
+	}
+}
+
+// TestPipelineTriggerAction_Invoke_WithVariables tests that variables,
+// template_parameters, and stages_to_skip are serialised into the request body.
+func TestPipelineTriggerAction_Invoke_WithVariables(t *testing.T) {
+	t.Parallel()
+
+	var capturedBody []byte
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		if r.Method == http.MethodPost {
+			var err error
+			capturedBody, err = io.ReadAll(r.Body)
+			if err != nil {
+				w.WriteHeader(http.StatusInternalServerError)
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(pipelineRunJSON(42, "inProgress", "unknown"))
+			return
+		}
+		w.WriteHeader(http.StatusMethodNotAllowed)
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	a := newTestAction(server)
+
+	ctx := context.Background()
+	schemaResp := &action.SchemaResponse{}
+	a.Schema(ctx, action.SchemaRequest{}, schemaResp)
+	schema := schemaResp.Schema
+	rawValue := tftypes.NewValue(schema.Type().TerraformType(ctx), map[string]tftypes.Value{
+		"project":               tftypes.NewValue(tftypes.String, "my-project"),
+		"pipeline_id":           tftypes.NewValue(tftypes.Number, int64(1)),
+		"auth_method":           tftypes.NewValue(tftypes.String, authMethodPAT),
+		"personal_access_token": tftypes.NewValue(tftypes.String, "my-pat"),
+		"branch_ref":            tftypes.NewValue(tftypes.String, "refs/heads/main"),
+		"variables": tftypes.NewValue(tftypes.Map{ElementType: tftypes.String}, map[string]tftypes.Value{
+			"Env": tftypes.NewValue(tftypes.String, "staging"),
+		}),
+		"template_parameters": tftypes.NewValue(tftypes.Map{ElementType: tftypes.String}, map[string]tftypes.Value{
+			"deployTarget": tftypes.NewValue(tftypes.String, "eastus"),
+		}),
+		"stages_to_skip": tftypes.NewValue(tftypes.List{ElementType: tftypes.String}, []tftypes.Value{
+			tftypes.NewValue(tftypes.String, "IntegrationTests"),
+		}),
+		"wait_for_completion": tftypes.NewValue(tftypes.Bool, nil),
+		"timeout_minutes":     tftypes.NewValue(tftypes.Number, nil),
+	})
+	cfg := tfsdk.Config{Raw: rawValue, Schema: schema}
+
+	resp, _ := invokeDevOpsAction(t, a, cfg)
+
+	if resp.Diagnostics.HasError() {
+		t.Errorf("expected no diagnostics, got: %v", resp.Diagnostics)
+	}
+	if capturedBody == nil {
+		t.Fatal("expected POST request body to be captured")
+	}
+	body := string(capturedBody)
+	if !strings.Contains(body, `"Env"`) || !strings.Contains(body, `"staging"`) {
+		t.Errorf("expected variable Env=staging in request body, got: %s", body)
+	}
+	if !strings.Contains(body, `"deployTarget"`) || !strings.Contains(body, `"eastus"`) {
+		t.Errorf("expected templateParameter deployTarget=eastus in request body, got: %s", body)
+	}
+	if !strings.Contains(body, `"stagesToSkip"`) || !strings.Contains(body, `"IntegrationTests"`) {
+		t.Errorf("expected stagesToSkip IntegrationTests in request body, got: %s", body)
+	}
+}
+
+// TestPipelineTriggerAction_Configure_InvalidProviderData verifies that passing
+// incorrect ProviderData sets a diagnostic error.
+func TestPipelineTriggerAction_Configure_InvalidProviderData(t *testing.T) {
+	t.Parallel()
+
+	a := &PipelineTriggerAction{}
+	req := action.ConfigureRequest{ProviderData: "not-a-client"}
+	resp := &action.ConfigureResponse{}
+	a.Configure(context.Background(), req, resp)
+
+	if !resp.Diagnostics.HasError() {
+		t.Error("expected diagnostics error for invalid provider data, got none")
 	}
 }
