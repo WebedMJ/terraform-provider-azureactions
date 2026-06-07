@@ -457,27 +457,23 @@ func TestPipelineTriggerAction_Invoke_InvalidAuthMethod(t *testing.T) {
 	}
 }
 
-// TestPipelineTriggerAction_HTTPClient_Timeout tests that the HTTP client
-// enforces timeouts on slow/unresponsive servers. This prevents indefinite
+// TestPipelineTriggerAction_HTTPClient_Timeout tests that per-request context
+// timeouts are enforced on slow/unresponsive servers. This prevents indefinite
 // hangs during terraform apply.
 func TestPipelineTriggerAction_HTTPClient_Timeout(t *testing.T) {
 	t.Parallel()
 
-	// Server delays every response well beyond the client timeout.
+	// Server delays every response well beyond the per-request timeout.
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		time.Sleep(2 * time.Second)
 		w.WriteHeader(http.StatusOK)
 	}))
 	defer server.Close()
 
-	// Use a short-timeout client that routes requests to the test server via
-	// hostRewriteTransport so the delay is reliably triggered.
-	shortTimeoutClient := &http.Client{
-		Timeout:   100 * time.Millisecond,
-		Transport: &hostRewriteTransport{host: serverHost(server.URL)},
-	}
+	// Inject a client that routes to the test server; no client-level Timeout
+	// is set — timeout is enforced via request context (httpRequestTimeout).
 	a := &PipelineTriggerAction{
-		httpClient:   shortTimeoutClient,
+		httpClient:   &http.Client{Transport: &hostRewriteTransport{host: serverHost(server.URL)}},
 		pollInterval: 50 * time.Millisecond,
 	}
 	req := action.ConfigureRequest{ProviderData: newDevOpsTestClient("https://dev.azure.com/myorg")}
@@ -490,10 +486,20 @@ func TestPipelineTriggerAction_HTTPClient_Timeout(t *testing.T) {
 		nil, nil,
 	)
 
-	invokeResp, _ := invokeDevOpsAction(t, a, cfg)
+	// Use a context deadline shorter than the server delay to trigger the timeout.
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	var progress []string
+	invokeResp := &action.InvokeResponse{
+		SendProgress: func(e action.InvokeProgressEvent) {
+			progress = append(progress, e.Message)
+		},
+	}
+	a.Invoke(ctx, action.InvokeRequest{Config: cfg}, invokeResp)
 
 	if !invokeResp.Diagnostics.HasError() {
-		t.Error("expected diagnostics error due to HTTP client timeout, got none")
+		t.Error("expected diagnostics error due to context timeout, got none")
 	}
 }
 
