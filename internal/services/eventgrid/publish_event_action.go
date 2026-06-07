@@ -251,7 +251,7 @@ func (p *PublishEventAction) Invoke(ctx context.Context, request action.InvokeRe
 		Message: fmt.Sprintf("Published %d CloudEvents successfully (HTTP %d)", eventCount, statusCode),
 	})
 	response.SendProgress(action.InvokeProgressEvent{
-		Message: fmt.Sprintf("Action result details (progress-only): endpoint=%s status_code=%d event_count=%d response_bytes=%d", endpointURL, statusCode, eventCount, len(respBody)),
+		Message: fmt.Sprintf("Action result details (progress-only): endpoint=%s status_code=%d event_count=%d response_bytes=%d", endpointLog, statusCode, eventCount, len(respBody)),
 	})
 }
 
