@@ -568,6 +568,34 @@ func TestPublishEventAction_Invoke_DataAndDataBase64Conflict(t *testing.T) {
 	}
 }
 
+func TestPublishEventAction_Invoke_InvalidBase64(t *testing.T) {
+	t.Parallel()
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	defer server.Close()
+
+	a := newPublishAction(server, nil)
+	invalidBase64 := "not-valid-base64!!!"
+	id := "evt-1"
+	cfg := buildPublishConfig(t,
+		"https://example.eventgrid.azure.net/api/events",
+		nil, nil, nil,
+		[]testCloudEvent{
+			{
+				ID:         &id,
+				Source:     "/tests/eventgrid",
+				Type:       "com.webedmj.event.created",
+				DataBase64: &invalidBase64,
+			},
+		},
+		nil, nil,
+	)
+	resp, _ := invokePublishAction(t, a, cfg)
+	if !resp.Diagnostics.HasError() {
+		t.Fatal("expected diagnostics error for invalid base64 data_base64, got none")
+	}
+}
+
 func TestPublishEventAction_Invoke_MissingCloudEventBlocks(t *testing.T) {
 	t.Parallel()
 

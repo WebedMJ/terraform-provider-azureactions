@@ -6,6 +6,7 @@ package eventgrid
 import (
 	"bytes"
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -360,6 +361,9 @@ func buildCloudEventsPayload(ctx context.Context, cloudEvents types.List) ([]byt
 		}
 
 		if dataBase64 != "" {
+			if _, err := base64.StdEncoding.DecodeString(dataBase64); err != nil {
+				return nil, 0, fmt.Errorf("cloud_event[%d].data_base64 is not valid base64: %w", i, err)
+			}
 			eventMap["data_base64"] = dataBase64
 		}
 
