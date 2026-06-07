@@ -308,7 +308,7 @@ func buildCloudEventsPayload(ctx context.Context, cloudEvents types.List) ([]byt
 
 		id := optionalStringValue(event.ID)
 		if id == "" {
-			id = defaultEventID()
+			id = defaultEventID(i)
 		}
 		eventMap["id"] = id
 
@@ -418,8 +418,8 @@ func requiredStringValue(value types.String, field string) (string, error) {
 	return strings.TrimSpace(value.ValueString()), nil
 }
 
-func defaultEventID() string {
-	return fmt.Sprintf("terraform-%s", time.Now().UTC().Format(time.RFC3339))
+func defaultEventID(index int) string {
+	return fmt.Sprintf("terraform-%s-%d", time.Now().UTC().Format(time.RFC3339Nano), index)
 }
 
 func optionalStringValue(value types.String) string {
