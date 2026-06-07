@@ -247,17 +247,15 @@ const (
 
 ### Azure DevOps HTTP client
 
-The DevOps action uses `net/http` directly. The default HTTP client (when no test override is set) must have **explicit timeouts** — never use `http.DefaultClient` in production paths:
+The DevOps action uses `net/http` directly. The default HTTP client (when no test override is set) must have transport-level timeouts configured, and each request must use a context deadline (the action wraps requests with `context.WithTimeout`).
 
-```go
-return &http.Client{
-    Timeout: 30 * time.Second,
-    Transport: &http.Transport{
-        DialContext:         (&net.Dialer{Timeout: 10 * time.Second}).DialContext,
-        TLSHandshakeTimeout: 10 * time.Second,
-        ...
-    },
-}
+    return &http.Client{
+        Transport: &http.Transport{
+            DialContext:         (&net.Dialer{Timeout: 10 * time.Second}).DialContext,
+            TLSHandshakeTimeout: 10 * time.Second,
+            ...
+        },
+    }
 ```
 
 ### Progress events — result detail pattern
