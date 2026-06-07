@@ -32,7 +32,7 @@ const (
 	authMethodPAT           = "pat"
 	authMethodSP            = "service_principal"
 	authMethodDAC           = "default_azure_credential"
-	defaultPollSeconds      = 15
+	defaultPollSeconds      = 10
 	httpDialTimeout         = 10 * time.Second // timeout for establishing connection
 	httpTLSHandshakeTimeout = 10 * time.Second
 	httpRequestTimeout      = 30 * time.Second // per-request total timeout via context
