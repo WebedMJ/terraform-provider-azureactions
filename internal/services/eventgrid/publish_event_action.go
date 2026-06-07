@@ -49,7 +49,8 @@ type PublishEventAction struct {
 var _ sdk.Action = &PublishEventAction{}
 
 // cloudEventExtNameRegexp matches valid CloudEvents extension attribute names:
-// only lowercase letters (a-z) and digits (0-9), as required by the CloudEvents spec.
+// only lowercase letters (a-z) and digits (0-9), as required by the CloudEvents v1.0 spec
+// (https://github.com/cloudevents/spec/blob/v1.0.2/cloudevents/spec.md#attribute-naming-convention).
 var cloudEventExtNameRegexp = regexp.MustCompile(`^[a-z0-9]+$`)
 
 func NewPublishEventAction() action.Action {
@@ -378,7 +379,7 @@ func buildCloudEventsPayload(ctx context.Context, cloudEvents types.List) ([]byt
 				}
 
 				if !cloudEventExtNameRegexp.MatchString(key) {
-					return nil, 0, fmt.Errorf("cloud_event[%d].cloud_event_extensions: extension attribute name %q must contain only lowercase letters (a-z) and digits (0-9)", i, key)
+					return nil, 0, fmt.Errorf("cloud_event[%d].cloud_event_extensions: extension attribute name %q must consist only of lowercase letters (a-z) and digits (0-9)", i, key)
 				}
 
 				if key == "specversion" || key == "id" || key == "source" || key == "type" || key == "subject" || key == "time" || key == "datacontenttype" || key == "data" || key == "data_base64" {
