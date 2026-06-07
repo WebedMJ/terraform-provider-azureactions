@@ -65,10 +65,10 @@ func PreCheckDevOps(t *testing.T) {
 }
 
 // PreCheckEventGrid validates environment variables for Event Grid acceptance tests.
-// The default auth method is DefaultAzureCredential, so subscription context is expected.
+// Note: subscription_id is not required for Event Grid data-plane calls; the AAD scope
+// https://eventgrid.azure.net/.default operates independently of Azure subscription context.
 func PreCheckEventGrid(t *testing.T) {
 	t.Helper()
-	PreCheckCommon(t)
 	RequireEnv(t,
 		"ACC_TEST_EVENTGRID_ENDPOINT",
 	)
