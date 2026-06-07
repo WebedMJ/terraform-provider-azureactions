@@ -19,6 +19,7 @@ import (
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
 	"github.com/WebedMJ/terraform-provider-azureactions/internal/sdk"
+	"github.com/google/uuid"
 	"github.com/hashicorp/terraform-plugin-framework-validators/listvalidator"
 	"github.com/hashicorp/terraform-plugin-framework/action"
 	"github.com/hashicorp/terraform-plugin-framework/action/schema"
@@ -130,7 +131,7 @@ func (p *PublishEventAction) Schema(_ context.Context, _ action.SchemaRequest, r
 						},
 						"id": schema.StringAttribute{
 							Optional:            true,
-							MarkdownDescription: "Event identifier. Defaults to `terraform-${timestamp()}` style when omitted.",
+							MarkdownDescription: "Event identifier. Defaults to a globally unique `terraform-<uuid>` value when omitted.",
 						},
 						"source": schema.StringAttribute{
 							Required:            true,
@@ -308,7 +309,7 @@ func buildCloudEventsPayload(ctx context.Context, cloudEvents types.List) ([]byt
 
 		id := optionalStringValue(event.ID)
 		if id == "" {
-			id = defaultEventID(i)
+			id = defaultEventID()
 		}
 		eventMap["id"] = id
 
@@ -418,8 +419,8 @@ func requiredStringValue(value types.String, field string) (string, error) {
 	return strings.TrimSpace(value.ValueString()), nil
 }
 
-func defaultEventID(index int) string {
-	return fmt.Sprintf("terraform-%d-%d", time.Now().UTC().UnixNano(), index)
+func defaultEventID() string {
+	return fmt.Sprintf("terraform-%s", uuid.NewString())
 }
 
 func optionalStringValue(value types.String) string {

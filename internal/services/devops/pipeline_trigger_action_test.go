@@ -22,6 +22,7 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
 	"github.com/WebedMJ/terraform-provider-azureactions/internal/clients"
 	"github.com/WebedMJ/terraform-provider-azureactions/internal/sdk"
+	"github.com/WebedMJ/terraform-provider-azureactions/internal/services/testhelpers"
 	"github.com/hashicorp/go-azure-sdk/sdk/environments"
 	"github.com/hashicorp/terraform-plugin-framework/action"
 	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
@@ -98,7 +99,7 @@ func newDevOpsTestClient(organizationURL string) *clients.Client {
 func newTestAction(server *httptest.Server) *PipelineTriggerAction {
 	a := &PipelineTriggerAction{
 		httpClient: &http.Client{
-			Transport: &hostRewriteTransport{host: serverHost(server.URL)},
+			Transport: &testhelpers.HostRewriteTransport{Host: testhelpers.ServerHost(server.URL)},
 		},
 		pollInterval: 50 * time.Millisecond,
 	}
@@ -106,29 +107,6 @@ func newTestAction(server *httptest.Server) *PipelineTriggerAction {
 	resp := &action.ConfigureResponse{}
 	a.Configure(context.Background(), req, resp)
 	return a
-}
-
-// serverHost strips the "http://" prefix from a URL to get just "host:port".
-func serverHost(rawURL string) string {
-	const prefix = "http://"
-	if len(rawURL) > len(prefix) && rawURL[:len(prefix)] == prefix {
-		return rawURL[len(prefix):]
-	}
-	return rawURL
-}
-
-// hostRewriteTransport rewrites every outgoing request's host so it reaches
-// the test server, regardless of what URL the action code constructs.
-type hostRewriteTransport struct {
-	host string // e.g. "127.0.0.1:PORT"
-}
-
-func (t *hostRewriteTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	clone := req.Clone(req.Context())
-	clone.URL.Scheme = "http"
-	clone.URL.Host = t.host
-	clone.Host = t.host
-	return http.DefaultTransport.RoundTrip(clone)
 }
 
 // buildDevOpsConfig constructs a tfsdk.Config for the pipeline trigger action.
@@ -473,7 +451,7 @@ func TestPipelineTriggerAction_HTTPClient_Timeout(t *testing.T) {
 	// Inject a client that routes to the test server; no client-level Timeout
 	// is set — timeout is enforced via request context (httpRequestTimeout).
 	a := &PipelineTriggerAction{
-		httpClient:   &http.Client{Transport: &hostRewriteTransport{host: serverHost(server.URL)}},
+		httpClient:   &http.Client{Transport: &testhelpers.HostRewriteTransport{Host: testhelpers.ServerHost(server.URL)}},
 		pollInterval: 50 * time.Millisecond,
 	}
 	req := action.ConfigureRequest{ProviderData: newDevOpsTestClient("https://dev.azure.com/myorg")}
@@ -590,7 +568,7 @@ func TestPipelineTriggerAction_Invoke_MissingProviderOrganizationURL(t *testing.
 
 	a := &PipelineTriggerAction{
 		httpClient: &http.Client{
-			Transport: &hostRewriteTransport{host: serverHost(server.URL)},
+			Transport: &testhelpers.HostRewriteTransport{Host: testhelpers.ServerHost(server.URL)},
 		},
 		pollInterval: 50 * time.Millisecond,
 	}

@@ -117,7 +117,7 @@ When publishing to an Event Grid domain endpoint, Event Grid uses CloudEvent `so
 
 - `access_key` (String) Event Grid access key, required when `auth_method` is `access_key`. Provide via a Terraform sensitive variable.
 - `auth_method` (String) Authentication method. Accepted values: `default_azure_credential`, `access_key`, `sas_token`. Defaults to `default_azure_credential` when omitted.
-- `cloud_event` (Block List) CloudEvent blocks to publish. Use repeated blocks or dynamic blocks. The provider encodes these into a CloudEvents JSON batch payload. Event Grid resources configured for the legacy EventGridEvent schema will reject these payloads. (see [below for nested schema](#nestedblock--cloud_event))
+- `cloud_event` (Block List) CloudEvent blocks to publish. At least one block is required. Use repeated blocks or dynamic blocks. The provider encodes these into a CloudEvents JSON batch payload. Event Grid resources configured for the legacy EventGridEvent schema will reject these payloads. (see [below for nested schema](#nestedblock--cloud_event))
 - `content_type` (String) HTTP content type. Defaults to `application/cloudevents-batch+json`.
 - `sas_token` (String) Event Grid SAS token, required when `auth_method` is `sas_token`. Provide via a Terraform sensitive variable.
 - `timeout_seconds` (Number) Request timeout in seconds. Defaults to 30. Must be >= 1.
@@ -136,7 +136,7 @@ Optional:
 - `data` (Map of String) Event data map. The provider JSON-encodes this map into the CloudEvent `data` value.
 - `data_base64` (String) Base64-encoded event payload for CloudEvent `data_base64`.
 - `datacontenttype` (String) Content type of event data. Defaults to `application/json` when `data` is provided.
-- `id` (String) Event identifier. Defaults to `terraform-${timestamp()}` style when omitted.
+- `id` (String) Event identifier. Defaults to a globally unique `terraform-<uuid>` value when omitted.
 - `specversion` (String) CloudEvents spec version. Defaults to `1.0`.
 - `subject` (String) Event subject.
 - `time` (String) Event time in RFC3339 format.

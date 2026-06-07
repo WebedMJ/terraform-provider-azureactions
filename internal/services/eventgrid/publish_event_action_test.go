@@ -18,9 +18,10 @@ import (
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore"
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
 	"github.com/WebedMJ/terraform-provider-azureactions/internal/clients"
+	"github.com/WebedMJ/terraform-provider-azureactions/internal/services/testhelpers"
+	"github.com/google/uuid"
 	"github.com/hashicorp/go-azure-sdk/sdk/environments"
 	"github.com/hashicorp/terraform-plugin-framework/action"
-	"github.com/hashicorp/terraform-plugin-framework/action/schema"
 	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-go/tftypes"
@@ -87,31 +88,10 @@ func newEventGridTestClient(credential azcore.TokenCredential) *clients.Client {
 	}
 }
 
-// hostRewriteTransport rewrites outgoing host to the test server.
-type hostRewriteTransport struct {
-	host string
-}
-
-func (t *hostRewriteTransport) RoundTrip(req *http.Request) (*http.Response, error) {
-	clone := req.Clone(req.Context())
-	clone.URL.Scheme = "http"
-	clone.URL.Host = t.host
-	clone.Host = t.host
-	return http.DefaultTransport.RoundTrip(clone)
-}
-
-func serverHost(rawURL string) string {
-	const prefix = "http://"
-	if strings.HasPrefix(rawURL, prefix) {
-		return rawURL[len(prefix):]
-	}
-	return rawURL
-}
-
 func newPublishAction(server *httptest.Server, cred azcore.TokenCredential) *PublishEventAction {
 	a := &PublishEventAction{
 		httpClient: &http.Client{
-			Transport: &hostRewriteTransport{host: serverHost(server.URL)},
+			Transport: &testhelpers.HostRewriteTransport{Host: testhelpers.ServerHost(server.URL)},
 		},
 	}
 	req := action.ConfigureRequest{ProviderData: newEventGridTestClient(cred)}
@@ -296,37 +276,6 @@ func TestPublishEventAction_Schema(t *testing.T) {
 	}
 }
 
-func TestPublishEventAction_Schema_CloudEventBlockValidator(t *testing.T) {
-	t.Parallel()
-
-	a := &PublishEventAction{}
-	resp := &action.SchemaResponse{}
-	a.Schema(context.Background(), action.SchemaRequest{}, resp)
-
-	if resp.Diagnostics.HasError() {
-		t.Fatalf("unexpected schema diagnostics: %v", resp.Diagnostics)
-	}
-
-	cloudEventBlock, ok := resp.Schema.Blocks["cloud_event"]
-	if !ok {
-		t.Fatal("expected cloud_event block in schema")
-	}
-
-	// Verify that the cloud_event block has validators
-	listBlock, ok := cloudEventBlock.(schema.ListNestedBlock)
-	if !ok {
-		t.Fatal("expected cloud_event to be a ListNestedBlock")
-	}
-
-	if len(listBlock.Validators) == 0 {
-		t.Fatal("expected cloud_event block to have validators")
-	}
-
-	// The validator should enforce at least 1 cloud_event block
-	// We can't directly test the validator's logic here, but we verify it exists
-	// The actual validation behavior is tested in TestPublishEventAction_Invoke_MissingCloudEventBlocks
-}
-
 func TestPublishEventAction_Metadata(t *testing.T) {
 	t.Parallel()
 
@@ -437,14 +386,21 @@ func TestPublishEventAction_Invoke_DefaultIDWhenOmitted(t *testing.T) {
 	if !ok || !strings.HasPrefix(id, "terraform-") {
 		t.Fatalf("expected default id prefix terraform-, got %v", payload[0]["id"])
 	}
+	uuidPart := strings.TrimPrefix(id, "terraform-")
+	if _, err := uuid.Parse(uuidPart); err != nil {
+		t.Fatalf("expected default id suffix to be a UUID, got %q: %v", uuidPart, err)
+	}
 }
 
 func TestPublishEventAction_Invoke_AccessKeySuccess(t *testing.T) {
 	t.Parallel()
 
+	var mu sync.Mutex
 	var headerVal string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
 		headerVal = r.Header.Get("aeg-sas-key")
+		mu.Unlock()
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`ok`))
 	}))
@@ -464,6 +420,8 @@ func TestPublishEventAction_Invoke_AccessKeySuccess(t *testing.T) {
 	if resp.Diagnostics.HasError() {
 		t.Fatalf("expected no diagnostics, got: %v", resp.Diagnostics)
 	}
+	mu.Lock()
+	defer mu.Unlock()
 	if headerVal != accessKey {
 		t.Fatalf("expected aeg-sas-key header %q, got %q", accessKey, headerVal)
 	}
@@ -472,9 +430,12 @@ func TestPublishEventAction_Invoke_AccessKeySuccess(t *testing.T) {
 func TestPublishEventAction_Invoke_SASTokenSuccess(t *testing.T) {
 	t.Parallel()
 
+	var mu sync.Mutex
 	var headerVal string
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
 		headerVal = r.Header.Get("aeg-sas-token")
+		mu.Unlock()
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`ok`))
 	}))
@@ -494,6 +455,8 @@ func TestPublishEventAction_Invoke_SASTokenSuccess(t *testing.T) {
 	if resp.Diagnostics.HasError() {
 		t.Fatalf("expected no diagnostics, got: %v", resp.Diagnostics)
 	}
+	mu.Lock()
+	defer mu.Unlock()
 	if headerVal != sasToken {
 		t.Fatalf("expected aeg-sas-token header %q, got %q", sasToken, headerVal)
 	}
@@ -705,7 +668,7 @@ func TestPublishEventAction_Invoke_DACMissingCredential(t *testing.T) {
 	defer server.Close()
 
 	a := &PublishEventAction{
-		httpClient: &http.Client{Transport: &hostRewriteTransport{host: serverHost(server.URL)}},
+		httpClient: &http.Client{Transport: &testhelpers.HostRewriteTransport{Host: testhelpers.ServerHost(server.URL)}},
 	}
 	req := action.ConfigureRequest{ProviderData: newEventGridTestClient(nil)}
 	cfgResp := &action.ConfigureResponse{}
@@ -735,8 +698,7 @@ func TestPublishEventAction_Invoke_HTTPClientTimeout(t *testing.T) {
 
 	a := &PublishEventAction{
 		httpClient: &http.Client{
-			Timeout:   100 * time.Millisecond,
-			Transport: &hostRewriteTransport{host: serverHost(server.URL)},
+			Transport: &testhelpers.HostRewriteTransport{Host: testhelpers.ServerHost(server.URL)},
 		},
 	}
 	req := action.ConfigureRequest{ProviderData: newEventGridTestClient(nil)}
@@ -749,10 +711,35 @@ func TestPublishEventAction_Invoke_HTTPClientTimeout(t *testing.T) {
 		sampleCloudEventBlocks(),
 		nil, nil,
 	)
-	resp, _ := invokePublishAction(t, a, cfg)
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+
+	resp := &action.InvokeResponse{
+		SendProgress: func(action.InvokeProgressEvent) {},
+	}
+	a.Invoke(ctx, action.InvokeRequest{Config: cfg}, resp)
 
 	if !resp.Diagnostics.HasError() {
 		t.Fatal("expected diagnostics error due to timeout, got none")
+	}
+}
+
+func TestPublishEventAction_HTTPClient_UsesContextTimeoutModel(t *testing.T) {
+	t.Parallel()
+
+	a := &PublishEventAction{}
+	client := a.getHTTPClient()
+
+	if client == nil {
+		t.Fatal("getHTTPClient returned nil")
+	}
+
+	if client.Timeout != 0 {
+		t.Errorf("HTTP client timeout is %v; expected 0 (context-driven timeout model)", client.Timeout)
+	}
+
+	if client.Transport == nil {
+		t.Error("HTTP client Transport is nil; should have custom transport with timeouts")
 	}
 }
 
