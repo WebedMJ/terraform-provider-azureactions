@@ -20,6 +20,7 @@ import (
 	"github.com/WebedMJ/terraform-provider-azureactions/internal/clients"
 	"github.com/hashicorp/go-azure-sdk/sdk/environments"
 	"github.com/hashicorp/terraform-plugin-framework/action"
+	"github.com/hashicorp/terraform-plugin-framework/action/schema"
 	"github.com/hashicorp/terraform-plugin-framework/tfsdk"
 	"github.com/hashicorp/terraform-plugin-framework/types"
 	"github.com/hashicorp/terraform-plugin-go/tftypes"
@@ -293,6 +294,37 @@ func TestPublishEventAction_Schema(t *testing.T) {
 	if _, ok := resp.Schema.Blocks["cloud_event"]; !ok {
 		t.Fatal("expected cloud_event block in schema")
 	}
+}
+
+func TestPublishEventAction_Schema_CloudEventBlockValidator(t *testing.T) {
+	t.Parallel()
+
+	a := &PublishEventAction{}
+	resp := &action.SchemaResponse{}
+	a.Schema(context.Background(), action.SchemaRequest{}, resp)
+
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("unexpected schema diagnostics: %v", resp.Diagnostics)
+	}
+
+	cloudEventBlock, ok := resp.Schema.Blocks["cloud_event"]
+	if !ok {
+		t.Fatal("expected cloud_event block in schema")
+	}
+
+	// Verify that the cloud_event block has validators
+	listBlock, ok := cloudEventBlock.(schema.ListNestedBlock)
+	if !ok {
+		t.Fatal("expected cloud_event to be a ListNestedBlock")
+	}
+
+	if len(listBlock.Validators) == 0 {
+		t.Fatal("expected cloud_event block to have validators")
+	}
+
+	// The validator should enforce at least 1 cloud_event block
+	// We can't directly test the validator's logic here, but we verify it exists
+	// The actual validation behavior is tested in TestPublishEventAction_Invoke_MissingCloudEventBlocks
 }
 
 func TestPublishEventAction_Metadata(t *testing.T) {
