@@ -221,6 +221,14 @@ func (r *RunbookTriggerAction) Invoke(ctx context.Context, request action.Invoke
 			case <-ticker.C:
 				jobResp, err := automationClient.Get(ctx, jobId, job.DefaultGetOperationOptions())
 				if err != nil {
+					// The wait can run out while a status check is still in
+					// progress (a slow request, or the SDK retrying it). Report
+					// it as the end of the wait, as in the ctx.Done case above.
+					if ctx.Err() != nil {
+						sdk.SetResponseErrorDiagnostic(response, "waiting for job completion",
+							fmt.Sprintf("stopped waiting for job %s to complete (%v); the job was not stopped and may still be running; last status check error: %v", jobName, ctx.Err(), err))
+						return
+					}
 					sdk.SetResponseErrorDiagnostic(response, "checking job status", fmt.Sprintf("failed to get job status: %v", err))
 					return
 				}

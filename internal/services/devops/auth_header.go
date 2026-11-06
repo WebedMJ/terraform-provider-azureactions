@@ -26,6 +26,9 @@ type authHeaderSource interface {
 	// Header returns the Authorization header value. forceRefresh asks for a
 	// new token instead of a cached one, after Azure DevOps answered 401.
 	Header(ctx context.Context, forceRefresh bool) (string, error)
+	// canRefresh reports whether asking again can give a different header, so
+	// a 401 is worth retrying. A Personal Access Token never changes.
+	canRefresh() bool
 }
 
 // staticAuthHeader is a fixed header, used for Personal Access Tokens.
@@ -34,6 +37,8 @@ type staticAuthHeader string
 func (s staticAuthHeader) Header(_ context.Context, _ bool) (string, error) {
 	return string(s), nil
 }
+
+func (staticAuthHeader) canRefresh() bool { return false }
 
 // credentialAuthHeader gets Entra tokens for Azure DevOps from a token
 // credential. The token is cached until tokenRefreshMargin before its expiry,
@@ -57,10 +62,16 @@ func (c *credentialAuthHeader) Header(ctx context.Context, forceRefresh bool) (s
 		now = c.now
 	}
 
+	// A token Azure DevOps rejected is dropped straight away, so it is never
+	// sent again, even when getting its replacement fails.
+	if forceRefresh {
+		c.token = azcore.AccessToken{}
+	}
+
 	// A token without a known expiry is never reused.
 	reusable := c.token.Token != "" && !c.token.ExpiresOn.IsZero() &&
 		c.token.ExpiresOn.Sub(now()) > tokenRefreshMargin
-	if forceRefresh || !reusable {
+	if !reusable {
 		// Always request the Azure DevOps token using the well-known app scope.
 		token, err := c.credential.GetToken(ctx, policy.TokenRequestOptions{Scopes: []string{devOpsTokenScope}})
 		if err != nil {
@@ -74,3 +85,5 @@ func (c *credentialAuthHeader) Header(ctx context.Context, forceRefresh bool) (s
 
 	return "Bearer " + c.token.Token, nil
 }
+
+func (*credentialAuthHeader) canRefresh() bool { return true }
