@@ -131,26 +131,26 @@ func RetryAfter(header http.Header, now time.Time) (time.Duration, bool) {
 }
 
 // Backoff returns the delay before retry number attempt (1 for the first
-// retry): base doubled per attempt, capped at max, with "equal jitter" (a
+// retry): base doubled per attempt, capped at maxDelay, with "equal jitter" (a
 // random value between half and all of the capped delay) so that many clients
 // do not retry in step. jitter returns a value in [0, 1); nil uses math/rand.
-func Backoff(attempt int, base, max time.Duration, jitter func() float64) time.Duration {
+func Backoff(attempt int, base, maxDelay time.Duration, jitter func() float64) time.Duration {
 	if base <= 0 {
 		return 0
 	}
-	if max < base {
-		max = base
+	if maxDelay < base {
+		maxDelay = base
 	}
 	if attempt < 1 {
 		attempt = 1
 	}
 
 	delay := base
-	for i := 1; i < attempt && delay < max; i++ {
+	for i := 1; i < attempt && delay < maxDelay; i++ {
 		delay *= 2
 	}
-	if delay > max {
-		delay = max
+	if delay > maxDelay {
+		delay = maxDelay
 	}
 
 	if jitter == nil {

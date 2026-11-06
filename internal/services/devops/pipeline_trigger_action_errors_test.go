@@ -734,7 +734,7 @@ func TestPipelineTriggerAction_TokenRequestTimeout(t *testing.T) {
 		defer server.Close()
 
 		a := newRetryTestAction(server, &slowCredential{fast: 0}, nil)
-		a.tokenRequestTimeout = 50 * time.Millisecond
+		a.tokenTimeout = 50 * time.Millisecond
 
 		start := time.Now()
 		resp, _ := invokeWithin(t, a, waitConfig(t, authMethodDAC), 5*time.Second)
@@ -758,7 +758,7 @@ func TestPipelineTriggerAction_TokenRequestTimeout(t *testing.T) {
 
 		credential := &slowCredential{fast: 2} // the up-front check and the trigger
 		a := newRetryTestAction(server, credential, nil)
-		a.tokenRequestTimeout = 50 * time.Millisecond
+		a.tokenTimeout = 50 * time.Millisecond
 
 		resp, _ := invokeWithin(t, a, waitConfig(t, authMethodDAC), 5*time.Second)
 		if !resp.Diagnostics.HasError() {

@@ -11,11 +11,13 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net"
 	"net/http"
 	"net/url"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"github.com/Azure/azure-sdk-for-go/sdk/azcore/runtime"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
@@ -65,6 +67,11 @@ const (
 	// credential (an Azure CLI process, a managed identity endpoint that does
 	// not answer) cannot hold the trigger or a poll indefinitely.
 	tokenRequestTimeout = time.Minute
+
+	// fedAuthRedirectHeader asks Azure DevOps to answer a request it cannot
+	// authenticate with a 401, instead of a 203 or a redirect to a sign-in page
+	// that would look like a successful (2xx) response.
+	fedAuthRedirectHeader = "X-TFS-FedAuthRedirect"
 )
 
 // PipelineTriggerAction implements sdk.Action for triggering an Azure DevOps
@@ -78,14 +85,14 @@ type PipelineTriggerAction struct {
 	// pollInterval is used in tests to override the default polling interval.
 	// A zero value uses defaultPollSeconds.
 	pollInterval time.Duration
-	// requestTimeout, tokenRequestTimeout, maxRetryDelay and maxRetryAfter are
-	// used in tests to shorten the per-request and token request timeouts and
-	// the retry delays. Zero values use httpRequestTimeout, tokenRequestTimeout,
+	// requestTimeout, tokenTimeout, maxRetryDelay and maxRetryAfter are used in
+	// tests to shorten the per-request and token request timeouts and the retry
+	// delays. Zero values use httpRequestTimeout, tokenRequestTimeout,
 	// defaultMaxRetryDelay and defaultMaxRetryAfter.
-	requestTimeout      time.Duration
-	tokenRequestTimeout time.Duration
-	maxRetryDelay       time.Duration
-	maxRetryAfter       time.Duration
+	requestTimeout time.Duration
+	tokenTimeout   time.Duration
+	maxRetryDelay  time.Duration
+	maxRetryAfter  time.Duration
 	// timeoutUnit is used in tests to shorten timeout_minutes. A zero value
 	// uses time.Minute.
 	timeoutUnit time.Duration
@@ -484,8 +491,8 @@ func (p *PipelineTriggerAction) getRequestTimeout() time.Duration {
 }
 
 func (p *PipelineTriggerAction) getTokenRequestTimeout() time.Duration {
-	if p.tokenRequestTimeout > 0 {
-		return p.tokenRequestTimeout
+	if p.tokenTimeout > 0 {
+		return p.tokenTimeout
 	}
 	return tokenRequestTimeout
 }
@@ -515,9 +522,10 @@ func (p *PipelineTriggerAction) retryDelay(err *requestError, attempt int, base 
 }
 
 // doRequest sends one Azure DevOps API request with a current Authorization
-// header and a per-request timeout, and returns the response body for a 200 or
-// 201. Any failure is returned as a *requestError that says how to treat it.
-func (p *PipelineTriggerAction) doRequest(ctx context.Context, client *http.Client, method, url string, auth authHeaderSource, forceRefresh bool, body []byte) ([]byte, *requestError) {
+// header and a per-request timeout, and returns the response body and its
+// Content-Type for a 200 or 201. Any failure is returned as a *requestError
+// that says how to treat it.
+func (p *PipelineTriggerAction) doRequest(ctx context.Context, client *http.Client, method, url string, auth authHeaderSource, forceRefresh bool, body []byte) ([]byte, string, *requestError) {
 	tokenCtx, cancelToken := context.WithTimeout(ctx, p.getTokenRequestTimeout())
 	header, err := auth.Header(tokenCtx, forceRefresh)
 	cancelToken()
@@ -536,7 +544,7 @@ func (p *PipelineTriggerAction) doRequest(ctx context.Context, client *http.Clie
 		// The identity library's message can include a whole response body or a
 		// report of every credential a chain tried, so it is shortened like an
 		// Azure DevOps error response.
-		return nil, &requestError{kind: kind, notSent: true, credential: true, err: fmt.Errorf("%s: %s", message, truncateText(err.Error()))}
+		return nil, "", &requestError{kind: kind, notSent: true, credential: true, err: fmt.Errorf("%s: %s", message, truncateText(err.Error()))}
 	}
 
 	reqCtx, cancel := context.WithTimeout(ctx, p.getRequestTimeout())
@@ -548,37 +556,53 @@ func (p *PipelineTriggerAction) doRequest(ctx context.Context, client *http.Clie
 	}
 	req, err := http.NewRequestWithContext(reqCtx, method, url, reader)
 	if err != nil {
-		return nil, &requestError{kind: httpretry.Fatal, notSent: true, err: fmt.Errorf("creating HTTP request: %w", err)}
+		return nil, "", &requestError{kind: httpretry.Fatal, notSent: true, err: fmt.Errorf("creating HTTP request: %w", err)}
 	}
 	if body != nil {
 		req.Header.Set("Content-Type", "application/json")
 	}
 	req.Header.Set("Authorization", header)
+	req.Header.Set(fedAuthRedirectHeader, "Suppress")
 
 	resp, err := client.Do(req)
 	if err != nil {
 		// Network errors and the per-request timeout are transient. Whether the
 		// server saw the request is only certain when the connection was never made.
-		return nil, &requestError{kind: httpretry.Transient, notSent: httpretry.IsNotSent(err), err: fmt.Errorf("sending request: %w", err)}
+		return nil, "", &requestError{kind: httpretry.Transient, notSent: httpretry.IsNotSent(err), err: fmt.Errorf("sending request: %w", err)}
 	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, &requestError{kind: httpretry.Transient, status: resp.StatusCode, err: fmt.Errorf("reading response body: %w", err)}
+		return nil, "", &requestError{kind: httpretry.Transient, status: resp.StatusCode, err: fmt.Errorf("reading response body: %w", err)}
 	}
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
 		retryAfter, _ := httpretry.RetryAfter(resp.Header, time.Now())
-		return nil, &requestError{
+		message := fmt.Sprintf("Azure DevOps API returned status %d: %s", resp.StatusCode, truncateBody(respBody))
+		if resp.StatusCode == http.StatusNonAuthoritativeInfo {
+			// A 203 is Azure DevOps' sign-in page for a credential it did not accept.
+			message += " (HTTP 203 means Azure DevOps did not accept the credential)"
+		}
+		return nil, "", &requestError{
 			kind:       httpretry.ClassifyStatus(resp.StatusCode),
 			status:     resp.StatusCode,
 			retryAfter: retryAfter,
-			err:        fmt.Errorf("Azure DevOps API returned status %d: %s", resp.StatusCode, truncateBody(respBody)),
+			err:        errors.New(message),
 		}
 	}
 
-	return respBody, nil
+	return respBody, resp.Header.Get("Content-Type"), nil
+}
+
+// isJSONContentType reports whether a Content-Type header value is JSON
+// (application/json or a +json type).
+func isJSONContentType(contentType string) bool {
+	mediaType, _, err := mime.ParseMediaType(contentType)
+	if err != nil {
+		return false
+	}
+	return mediaType == "application/json" || strings.HasSuffix(mediaType, "+json")
 }
 
 // credentialRejected reports whether err shows that Microsoft Entra ID answered
@@ -635,12 +659,22 @@ func truncateBody(body []byte) string {
 	return truncateText(string(body))
 }
 
-// truncateText cuts text for an error or progress message to maxErrorBodyBytes.
+// truncateText prepares text from outside the provider (a response body, a
+// credential error) for an error or progress message: it replaces invalid UTF-8
+// and cuts the text to at most maxErrorBodyBytes without splitting a character.
+// Progress messages are sent to Terraform as protocol buffer strings, which must
+// be valid UTF-8 or the whole action fails.
 func truncateText(text string) string {
+	size := len(text)
+	text = strings.ToValidUTF8(text, "�")
 	if len(text) <= maxErrorBodyBytes {
 		return text
 	}
-	return fmt.Sprintf("%s... (%d bytes, truncated)", text[:maxErrorBodyBytes], len(text))
+	cut := maxErrorBodyBytes
+	for cut > 0 && !utf8.RuneStart(text[cut]) {
+		cut--
+	}
+	return fmt.Sprintf("%s... (%d bytes, truncated)", text[:cut], size)
 }
 
 // triggerPipeline sends the POST request to the Azure DevOps Pipelines API
@@ -660,13 +694,18 @@ func (p *PipelineTriggerAction) triggerPipeline(ctx context.Context, response *a
 	forceRefresh := false
 
 	for attempt := 1; ; attempt++ {
-		respBody, reqErr := p.doRequest(ctx, client, http.MethodPost, url, auth, forceRefresh, body)
+		respBody, contentType, reqErr := p.doRequest(ctx, client, http.MethodPost, url, auth, forceRefresh, body)
 		forceRefresh = false
 
 		if reqErr == nil {
 			var run pipelineRunResponse
 			if err := json.Unmarshal(respBody, &run); err != nil {
-				return nil, fmt.Errorf("parsing pipeline run response: %w; Azure DevOps accepted the request, so a run of %s was queued: check the pipeline's runs before applying again", err, pipelineDesc)
+				if isJSONContentType(contentType) {
+					return nil, fmt.Errorf("parsing pipeline run response: %w; Azure DevOps accepted the request, so a run of %s was queued: check the pipeline's runs before applying again", err, pipelineDesc)
+				}
+				// Not the API's JSON (for example an HTML page from a proxy): the run
+				// may or may not have been queued.
+				return nil, fmt.Errorf("parsing pipeline run response (Content-Type %q): %w; a run of %s may have been queued: check the pipeline's runs before applying again", contentType, err, pipelineDesc)
 			}
 			return &run, nil
 		}
@@ -701,10 +740,11 @@ func (p *PipelineTriggerAction) triggerPipeline(ctx context.Context, response *a
 
 // triggerFailedError adds a warning to a trigger failure when the request may
 // have reached Azure DevOps and queued a run: it was sent and then timed out,
-// lost its connection or got a server error, or Azure DevOps accepted it (2xx)
-// but its response could not be read.
+// lost its connection or got a server error, or Azure DevOps accepted it (200 or
+// 201) but its response could not be read. Other statuses, including a 203
+// sign-in page, mean no run was queued.
 func triggerFailedError(reqErr *requestError, pipelineDesc string) error {
-	accepted := reqErr.status >= http.StatusOK && reqErr.status < http.StatusMultipleChoices
+	accepted := reqErr.status == http.StatusOK || reqErr.status == http.StatusCreated
 	if reqErr.notSent || (reqErr.status != 0 && reqErr.status < http.StatusInternalServerError && !accepted) {
 		return reqErr
 	}
@@ -865,7 +905,7 @@ func runLink(run *pipelineRunResponse, statusURL string) string {
 
 // getPipelineRun fetches the current state of a pipeline run.
 func (p *PipelineTriggerAction) getPipelineRun(ctx context.Context, client *http.Client, statusURL string, auth authHeaderSource, forceRefresh bool) (*pipelineRunResponse, *requestError) {
-	body, reqErr := p.doRequest(ctx, client, http.MethodGet, statusURL, auth, forceRefresh, nil)
+	body, _, reqErr := p.doRequest(ctx, client, http.MethodGet, statusURL, auth, forceRefresh, nil)
 	if reqErr != nil {
 		return nil, reqErr
 	}
