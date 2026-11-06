@@ -526,9 +526,9 @@ func TestPipelineTriggerAction_Invoke_PAT_Missing(t *testing.T) {
 	}
 }
 
-// TestPipelineTriggerAction_ResolveAuthHeader_UsesFixedScope verifies that
+// TestPipelineTriggerAction_ResolveAuthSource_UsesFixedScope verifies that
 // Azure DevOps auth always requests token using the well-known .default scope.
-func TestPipelineTriggerAction_ResolveAuthHeader_UsesFixedScope(t *testing.T) {
+func TestPipelineTriggerAction_ResolveAuthSource_UsesFixedScope(t *testing.T) {
 	t.Parallel()
 
 	credential := &mockAzureTokenCredential{token: "fallback-devops-token"}
@@ -544,13 +544,17 @@ func TestPipelineTriggerAction_ResolveAuthHeader_UsesFixedScope(t *testing.T) {
 		},
 	}
 
-	header, err := a.resolveAuthHeader(context.Background(), PipelineTriggerActionModel{
+	source, err := a.resolveAuthSource(context.Background(), PipelineTriggerActionModel{
 		AuthMethod: types.StringValue(authMethodDAC),
 	})
 	if err != nil {
 		t.Fatalf("expected no error, got: %v", err)
 	}
 
+	header, err := source.Header(context.Background(), false)
+	if err != nil {
+		t.Fatalf("expected no error, got: %v", err)
+	}
 	if header != "Bearer fallback-devops-token" {
 		t.Fatalf("expected Bearer header with fallback token, got: %q", header)
 	}

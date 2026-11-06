@@ -8,6 +8,7 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -16,7 +17,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Azure/azure-sdk-for-go/sdk/azcore/policy"
+	"github.com/WebedMJ/terraform-provider-azureactions/internal/httpretry"
 	"github.com/WebedMJ/terraform-provider-azureactions/internal/sdk"
 	"github.com/hashicorp/terraform-plugin-framework/action"
 	"github.com/hashicorp/terraform-plugin-framework/action/schema"
@@ -36,6 +37,15 @@ const (
 	httpDialTimeout         = 10 * time.Second // timeout for establishing connection
 	httpTLSHandshakeTimeout = 10 * time.Second
 	httpRequestTimeout      = 30 * time.Second // per-request total timeout via context
+
+	// Retry policy. While waiting, transient poll errors are retried with
+	// backoff (starting at the poll interval) until the wait ends. The trigger
+	// request is only retried when Azure DevOps cannot have queued a run.
+	defaultMaxRetryDelay   = 2 * time.Minute // cap on the backoff between retries
+	defaultMaxRetryAfter   = 5 * time.Minute // cap on a server-supplied Retry-After
+	triggerRetryBaseDelay  = 2 * time.Second
+	triggerMaxAttempts     = 3
+	unauthorizedRetryLimit = 1 // a 401 is retried once with a refreshed token
 )
 
 // PipelineTriggerAction implements sdk.Action for triggering an Azure DevOps
@@ -49,6 +59,12 @@ type PipelineTriggerAction struct {
 	// pollInterval is used in tests to override the default polling interval.
 	// A zero value uses defaultPollSeconds.
 	pollInterval time.Duration
+	// requestTimeout, maxRetryDelay and maxRetryAfter are used in tests to
+	// shorten the per-request timeout and the retry delays. Zero values use
+	// httpRequestTimeout, defaultMaxRetryDelay and defaultMaxRetryAfter.
+	requestTimeout time.Duration
+	maxRetryDelay  time.Duration
+	maxRetryAfter  time.Duration
 }
 
 var _ sdk.Action = &PipelineTriggerAction{}
@@ -100,7 +116,24 @@ type pipelineRunResponse struct {
 	Name   string `json:"name"`
 	State  string `json:"state"`  // unknown, inProgress, canceling, completed
 	Result string `json:"result"` // unknown, succeeded, failed, canceled
+	Links  struct {
+		Web struct {
+			Href string `json:"href"`
+		} `json:"web"`
+	} `json:"_links"`
 }
+
+// requestError describes a failed Azure DevOps request and how to treat it.
+type requestError struct {
+	kind       httpretry.Kind
+	status     int           // HTTP status, 0 when no response was received
+	retryAfter time.Duration // server-supplied Retry-After, 0 when absent
+	notSent    bool          // the request never reached the server
+	err        error
+}
+
+func (e *requestError) Error() string { return e.err.Error() }
+func (e *requestError) Unwrap() error { return e.err }
 
 // Metadata sets the action type name.
 func (p *PipelineTriggerAction) Metadata(_ context.Context, _ action.MetadataRequest, response *action.MetadataResponse) {
@@ -151,12 +184,16 @@ func (p *PipelineTriggerAction) Schema(_ context.Context, _ action.SchemaRequest
 				MarkdownDescription: "List of stage names to skip in the pipeline run.",
 			},
 			"wait_for_completion": schema.BoolAttribute{
-				Optional:            true,
-				MarkdownDescription: "Whether to wait for the pipeline run to reach a terminal state before returning. Defaults to false.",
+				Optional: true,
+				MarkdownDescription: "Whether to wait for the pipeline run to reach a terminal state before returning. Defaults to false. " +
+					"While waiting, each status poll uses a current access token, and transient poll errors (network errors, timeouts, " +
+					"HTTP 408, 429, 500, 502, 503, 504) are retried with backoff until `timeout_minutes` runs out.",
 			},
 			"timeout_minutes": schema.Int64Attribute{
-				Optional:            true,
-				MarkdownDescription: "Maximum time in minutes to wait for pipeline completion. Only used when wait_for_completion is true. Defaults to 30.",
+				Optional: true,
+				MarkdownDescription: "Maximum time in minutes to wait for pipeline completion. Only used when wait_for_completion is true. Defaults to 30. " +
+					"The time starts once the run has been queued, so time the run spends waiting for an agent counts against it. " +
+					"When it runs out the action fails, but the pipeline run is not cancelled and may still be running.",
 			},
 		},
 	}
@@ -184,8 +221,9 @@ func (p *PipelineTriggerAction) Invoke(ctx context.Context, request action.Invok
 		return
 	}
 
-	// Resolve the authorisation header
-	authHeader, err := p.resolveAuthHeader(ctx, model)
+	// Resolve the authorisation source. It is asked for a header on every
+	// request, so a long wait never polls with an expired token.
+	auth, err := p.resolveAuthSource(ctx, model)
 	if err != nil {
 		sdk.SetResponseErrorDiagnostic(response, "resolving authentication", err)
 		return
@@ -220,7 +258,7 @@ func (p *PipelineTriggerAction) Invoke(ctx context.Context, request action.Invok
 		Message: fmt.Sprintf("Triggering pipeline %d in project %s (org: %s)", pipelineID, project, orgURL),
 	})
 
-	run, err := p.triggerPipeline(ctx, triggerURL, authHeader, body)
+	run, err := p.triggerPipeline(ctx, response, triggerURL, auth, body)
 	if err != nil {
 		sdk.SetResponseErrorDiagnostic(response, "triggering pipeline", err)
 		return
@@ -256,7 +294,7 @@ func (p *PipelineTriggerAction) Invoke(ctx context.Context, request action.Invok
 		statusURL := fmt.Sprintf("%s/%s/_apis/pipelines/%d/runs/%d?api-version=%s",
 			orgURL, project, pipelineID, run.ID, devOpsAPIVersion)
 
-		finalRun, err := p.waitForPipelineRun(waitCtx, response, statusURL, authHeader, run.ID)
+		finalRun, err := p.waitForPipelineRun(waitCtx, response, statusURL, auth, run)
 		if err != nil {
 			sdk.SetResponseErrorDiagnostic(response, "waiting for pipeline run", err)
 			return
@@ -285,39 +323,34 @@ func (p *PipelineTriggerAction) organizationURL() (string, error) {
 	return orgURL, nil
 }
 
-// resolveAuthHeader returns the Authorization header value to use for the
-// Azure DevOps API request.
-func (p *PipelineTriggerAction) resolveAuthHeader(ctx context.Context, model PipelineTriggerActionModel) (string, error) {
+// resolveAuthSource returns the source of the Authorization header for the
+// Azure DevOps API requests. For Entra authentication it gets the first token
+// straight away, so a credential problem fails before anything is triggered.
+func (p *PipelineTriggerAction) resolveAuthSource(ctx context.Context, model PipelineTriggerActionModel) (authHeaderSource, error) {
 	switch model.AuthMethod.ValueString() {
 	case authMethodPAT:
 		if model.PersonalAccessToken.IsNull() || model.PersonalAccessToken.IsUnknown() || model.PersonalAccessToken.ValueString() == "" {
-			return "", fmt.Errorf("personal_access_token must be provided when auth_method is %q", authMethodPAT)
+			return nil, fmt.Errorf("personal_access_token must be provided when auth_method is %q", authMethodPAT)
 		}
 		encoded := base64.StdEncoding.EncodeToString([]byte(":" + model.PersonalAccessToken.ValueString()))
-		return "Basic " + encoded, nil
+		return staticAuthHeader("Basic " + encoded), nil
 
 	case authMethodSP, authMethodDAC:
 		if p.Client == nil {
-			return "", fmt.Errorf("provider client is not configured; ensure the provider block is set up with valid Azure credentials")
+			return nil, fmt.Errorf("provider client is not configured; ensure the provider block is set up with valid Azure credentials")
 		}
 		if p.Client.Credential == nil {
-			return "", fmt.Errorf("provider token credential is not configured; ensure the provider has valid Azure credentials")
+			return nil, fmt.Errorf("provider token credential is not configured; ensure the provider has valid Azure credentials")
 		}
 
-		// Always request Azure DevOps token using the well-known app scope.
-		token, err := p.Client.Credential.GetToken(ctx, policy.TokenRequestOptions{Scopes: []string{devOpsTokenScope}})
-		if err != nil {
-			return "", fmt.Errorf("obtaining Azure DevOps token for scope %q: %w", devOpsTokenScope, err)
+		source := &credentialAuthHeader{credential: p.Client.Credential}
+		if _, err := source.Header(ctx, false); err != nil {
+			return nil, err
 		}
-
-		if strings.TrimSpace(token.Token) == "" {
-			return "", fmt.Errorf("obtaining Azure DevOps token for scope %q returned an empty access token", devOpsTokenScope)
-		}
-
-		return fmt.Sprintf("Bearer %s", token.Token), nil
+		return source, nil
 
 	default:
-		return "", fmt.Errorf("unsupported auth_method: %q", model.AuthMethod.ValueString())
+		return nil, fmt.Errorf("unsupported auth_method: %q", model.AuthMethod.ValueString())
 	}
 }
 
@@ -401,114 +434,260 @@ func (p *PipelineTriggerAction) getHTTPClient() *http.Client {
 	}
 }
 
-// triggerPipeline sends the POST request to the Azure DevOps Pipelines API
-// and returns the pipeline run response.
-func (p *PipelineTriggerAction) triggerPipeline(ctx context.Context, url, authHeader string, body []byte) (*pipelineRunResponse, error) {
-	reqCtx, cancel := context.WithTimeout(ctx, httpRequestTimeout)
+func (p *PipelineTriggerAction) getRequestTimeout() time.Duration {
+	if p.requestTimeout > 0 {
+		return p.requestTimeout
+	}
+	return httpRequestTimeout
+}
+
+func (p *PipelineTriggerAction) getMaxRetryDelay() time.Duration {
+	if p.maxRetryDelay > 0 {
+		return p.maxRetryDelay
+	}
+	return defaultMaxRetryDelay
+}
+
+func (p *PipelineTriggerAction) getMaxRetryAfter() time.Duration {
+	if p.maxRetryAfter > 0 {
+		return p.maxRetryAfter
+	}
+	return defaultMaxRetryAfter
+}
+
+// retryDelay returns how long to wait before retrying after err: the backoff
+// for this attempt, or the server's Retry-After (capped) when that is longer.
+func (p *PipelineTriggerAction) retryDelay(err *requestError, attempt int, base time.Duration) time.Duration {
+	delay := httpretry.Backoff(attempt, base, p.getMaxRetryDelay(), nil)
+	if err.retryAfter > delay {
+		delay = min(err.retryAfter, p.getMaxRetryAfter())
+	}
+	return delay
+}
+
+// doRequest sends one Azure DevOps API request with a current Authorization
+// header and a per-request timeout, and returns the response body for a 200 or
+// 201. Any failure is returned as a *requestError that says how to treat it.
+func (p *PipelineTriggerAction) doRequest(ctx context.Context, method, url string, auth authHeaderSource, forceRefresh bool, body []byte) ([]byte, *requestError) {
+	header, err := auth.Header(ctx, forceRefresh)
+	if err != nil {
+		// The request was never sent. Getting a token can fail for passing
+		// reasons (for example a network problem reaching Entra ID).
+		return nil, &requestError{kind: httpretry.Transient, notSent: true, err: err}
+	}
+
+	reqCtx, cancel := context.WithTimeout(ctx, p.getRequestTimeout())
 	defer cancel()
 
-	req, err := http.NewRequestWithContext(reqCtx, http.MethodPost, url, bytes.NewReader(body))
-	if err != nil {
-		return nil, fmt.Errorf("creating HTTP request: %w", err)
+	var reader io.Reader
+	if body != nil {
+		reader = bytes.NewReader(body)
 	}
-	req.Header.Set("Content-Type", "application/json")
-	req.Header.Set("Authorization", authHeader)
+	req, err := http.NewRequestWithContext(reqCtx, method, url, reader)
+	if err != nil {
+		return nil, &requestError{kind: httpretry.Fatal, notSent: true, err: fmt.Errorf("creating HTTP request: %w", err)}
+	}
+	if body != nil {
+		req.Header.Set("Content-Type", "application/json")
+	}
+	req.Header.Set("Authorization", header)
 
 	resp, err := p.getHTTPClient().Do(req)
 	if err != nil {
-		return nil, fmt.Errorf("sending request: %w", err)
+		// Network errors and the per-request timeout are transient. Whether the
+		// server saw the request is only certain when the connection was never made.
+		return nil, &requestError{kind: httpretry.Transient, notSent: httpretry.IsNotSent(err), err: fmt.Errorf("sending request: %w", err)}
 	}
 	defer resp.Body.Close()
 
 	respBody, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return nil, fmt.Errorf("reading response body: %w", err)
+		return nil, &requestError{kind: httpretry.Transient, status: resp.StatusCode, err: fmt.Errorf("reading response body: %w", err)}
 	}
 
 	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-		return nil, fmt.Errorf("Azure DevOps API returned status %d: %s", resp.StatusCode, string(respBody))
+		retryAfter, _ := httpretry.RetryAfter(resp.Header, time.Now())
+		return nil, &requestError{
+			kind:       httpretry.ClassifyStatus(resp.StatusCode),
+			status:     resp.StatusCode,
+			retryAfter: retryAfter,
+			err:        fmt.Errorf("Azure DevOps API returned status %d: %s", resp.StatusCode, string(respBody)),
+		}
 	}
 
-	var run pipelineRunResponse
-	if err := json.Unmarshal(respBody, &run); err != nil {
-		return nil, fmt.Errorf("parsing pipeline run response: %w", err)
-	}
-
-	return &run, nil
+	return respBody, nil
 }
 
-// waitForPipelineRun polls the pipeline run status URL until the run reaches a
-// terminal state (completed) or the context is cancelled.
-func (p *PipelineTriggerAction) waitForPipelineRun(ctx context.Context, response *action.InvokeResponse, statusURL, authHeader string, runID int) (*pipelineRunResponse, error) {
-	interval := p.pollInterval
-	if interval <= 0 {
-		interval = defaultPollSeconds * time.Second
-	}
-	ticker := time.NewTicker(interval)
-	defer ticker.Stop()
+// triggerPipeline sends the POST request to the Azure DevOps Pipelines API
+// and returns the pipeline run response.
+//
+// Queuing a run is not idempotent: if a request might have reached Azure
+// DevOps (a server error, or a timeout after the request was sent) it is not
+// retried, because a retry could queue a second run. It is retried only when
+// Azure DevOps cannot have queued a run: the connection was never made, the
+// request was throttled (429), or it was rejected as unauthorised (401, once,
+// with a new token).
+func (p *PipelineTriggerAction) triggerPipeline(ctx context.Context, response *action.InvokeResponse, url string, auth authHeaderSource, body []byte) (*pipelineRunResponse, error) {
+	authRetries := 0
+	forceRefresh := false
 
-	for {
-		select {
-		case <-ctx.Done():
-			return nil, fmt.Errorf("waiting for pipeline run %d to complete: %w", runID, ctx.Err())
-		case <-ticker.C:
-			run, err := p.getPipelineRun(ctx, statusURL, authHeader)
-			if err != nil {
-				return nil, fmt.Errorf("polling pipeline run status: %w", err)
+	for attempt := 1; ; attempt++ {
+		respBody, reqErr := p.doRequest(ctx, http.MethodPost, url, auth, forceRefresh, body)
+		forceRefresh = false
+
+		if reqErr == nil {
+			var run pipelineRunResponse
+			if err := json.Unmarshal(respBody, &run); err != nil {
+				return nil, fmt.Errorf("parsing pipeline run response: %w", err)
 			}
+			return &run, nil
+		}
 
+		if httpretry.IsParentDone(ctx) {
+			return nil, reqErr
+		}
+
+		switch {
+		case reqErr.kind == httpretry.Auth && authRetries < unauthorizedRetryLimit:
+			authRetries++
+			forceRefresh = true
 			response.SendProgress(action.InvokeProgressEvent{
-				Message: fmt.Sprintf("Pipeline run %d state: %s", runID, run.State),
+				Message: "Azure DevOps rejected the access token (HTTP 401); retrying the trigger with a new token",
 			})
 
-			if run.State == "completed" {
-				switch run.Result {
-				case "succeeded":
-					response.SendProgress(action.InvokeProgressEvent{
-						Message: fmt.Sprintf("Pipeline run %d completed successfully", runID),
-					})
-					return run, nil
-				case "failed":
-					return nil, fmt.Errorf("pipeline run %d failed", runID)
-				case "canceled":
-					return nil, fmt.Errorf("pipeline run %d was canceled", runID)
-				default:
-					return nil, fmt.Errorf("pipeline run %d completed with unknown result: %s", runID, run.Result)
-				}
+		case attempt < triggerMaxAttempts && (reqErr.notSent || reqErr.status == http.StatusTooManyRequests):
+			delay := p.retryDelay(reqErr, attempt, triggerRetryBaseDelay)
+			response.SendProgress(action.InvokeProgressEvent{
+				Message: fmt.Sprintf("Triggering the pipeline failed before a run could be queued (attempt %d of %d): %v; retrying in %s",
+					attempt, triggerMaxAttempts, reqErr, delay.Round(time.Millisecond)),
+			})
+			if err := httpretry.Sleep(ctx, delay); err != nil {
+				return nil, reqErr
 			}
+
+		default:
+			return nil, reqErr
 		}
 	}
 }
 
+// waitForPipelineRun polls the pipeline run status URL until the run reaches a
+// terminal state (completed) or the context ends.
+//
+// Every poll gets a current access token. Transient poll errors are retried
+// with backoff until the context ends; a 401 is retried once with a new token;
+// any other error ends the wait.
+func (p *PipelineTriggerAction) waitForPipelineRun(ctx context.Context, response *action.InvokeResponse, statusURL string, auth authHeaderSource, run *pipelineRunResponse) (*pipelineRunResponse, error) {
+	interval := p.pollInterval
+	if interval <= 0 {
+		interval = defaultPollSeconds * time.Second
+	}
+
+	started := time.Now()
+	transientFailures := 0
+	authRetries := 0
+	forceRefresh := false
+
+	timer := time.NewTimer(interval)
+	defer timer.Stop()
+
+	for {
+		select {
+		case <-ctx.Done():
+			return nil, waitEndedError(ctx, run, statusURL, time.Since(started))
+		case <-timer.C:
+		}
+
+		current, reqErr := p.getPipelineRun(ctx, statusURL, auth, forceRefresh)
+		forceRefresh = false
+
+		if reqErr != nil {
+			if httpretry.IsParentDone(ctx) {
+				return nil, waitEndedError(ctx, run, statusURL, time.Since(started))
+			}
+
+			switch reqErr.kind {
+			case httpretry.Auth:
+				if authRetries >= unauthorizedRetryLimit {
+					return nil, fmt.Errorf("polling pipeline run %d status: still unauthorised after getting a new access token: %w", run.ID, reqErr)
+				}
+				authRetries++
+				forceRefresh = true
+				response.SendProgress(action.InvokeProgressEvent{
+					Message: fmt.Sprintf("Polling pipeline run %d: Azure DevOps rejected the access token (HTTP 401); retrying with a new token", run.ID),
+				})
+				timer.Reset(0)
+
+			case httpretry.Transient:
+				transientFailures++
+				delay := p.retryDelay(reqErr, transientFailures, interval)
+				response.SendProgress(action.InvokeProgressEvent{
+					Message: fmt.Sprintf("Polling pipeline run %d failed (attempt %d): %v; retrying in %s",
+						run.ID, transientFailures, reqErr, delay.Round(time.Millisecond)),
+				})
+				timer.Reset(delay)
+
+			default:
+				return nil, fmt.Errorf("polling pipeline run %d status: %w", run.ID, reqErr)
+			}
+			continue
+		}
+
+		transientFailures = 0
+		authRetries = 0
+
+		response.SendProgress(action.InvokeProgressEvent{
+			Message: fmt.Sprintf("Pipeline run %d state: %s", run.ID, current.State),
+		})
+
+		if current.State == "completed" {
+			switch current.Result {
+			case "succeeded":
+				response.SendProgress(action.InvokeProgressEvent{
+					Message: fmt.Sprintf("Pipeline run %d completed successfully", run.ID),
+				})
+				return current, nil
+			case "failed":
+				return nil, fmt.Errorf("pipeline run %d failed", run.ID)
+			case "canceled":
+				return nil, fmt.Errorf("pipeline run %d was canceled", run.ID)
+			default:
+				return nil, fmt.Errorf("pipeline run %d completed with unknown result: %s", run.ID, current.Result)
+			}
+		}
+
+		timer.Reset(interval)
+	}
+}
+
+// waitEndedError explains why the wait stopped. The pipeline run itself is not
+// cancelled, so the error says it may still be running and where to look.
+func waitEndedError(ctx context.Context, run *pipelineRunResponse, statusURL string, waited time.Duration) error {
+	where := run.Links.Web.Href
+	if where == "" {
+		where = statusURL
+	}
+
+	reason := "the wait was cancelled"
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		reason = "timed out"
+	}
+
+	return fmt.Errorf("stopped waiting for pipeline run %d after %s (%s); the run was not cancelled and may still be running: %s: %w",
+		run.ID, waited.Round(time.Second), reason, where, ctx.Err())
+}
+
 // getPipelineRun fetches the current state of a pipeline run.
-func (p *PipelineTriggerAction) getPipelineRun(ctx context.Context, statusURL, authHeader string) (*pipelineRunResponse, error) {
-	reqCtx, cancel := context.WithTimeout(ctx, httpRequestTimeout)
-	defer cancel()
-
-	req, err := http.NewRequestWithContext(reqCtx, http.MethodGet, statusURL, nil)
-	if err != nil {
-		return nil, fmt.Errorf("creating status request: %w", err)
-	}
-	req.Header.Set("Authorization", authHeader)
-
-	resp, err := p.getHTTPClient().Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("sending status request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("reading status response: %w", err)
-	}
-
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("Azure DevOps status API returned %d: %s", resp.StatusCode, string(body))
+func (p *PipelineTriggerAction) getPipelineRun(ctx context.Context, statusURL string, auth authHeaderSource, forceRefresh bool) (*pipelineRunResponse, *requestError) {
+	body, reqErr := p.doRequest(ctx, http.MethodGet, statusURL, auth, forceRefresh, nil)
+	if reqErr != nil {
+		return nil, reqErr
 	}
 
 	var run pipelineRunResponse
 	if err := json.Unmarshal(body, &run); err != nil {
-		return nil, fmt.Errorf("parsing pipeline run status: %w", err)
+		// A 200 that cannot be parsed is not a passing problem.
+		return nil, &requestError{kind: httpretry.Fatal, status: http.StatusOK, err: fmt.Errorf("parsing pipeline run status: %w", err)}
 	}
 
 	return &run, nil
