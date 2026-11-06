@@ -564,7 +564,16 @@ func (p *PipelineTriggerAction) doRequest(ctx context.Context, client *http.Clie
 	req.Header.Set("Authorization", header)
 	req.Header.Set(fedAuthRedirectHeader, "Suppress")
 
-	resp, err := client.Do(req)
+	// Redirects are not followed. With X-TFS-FedAuthRedirect: Suppress Azure
+	// DevOps answers API requests itself, so a redirect points at a sign-in page
+	// or comes from a proxy. Following it would also hide that the original
+	// request already reached a server: a connection failure at the redirect
+	// target would then look like a request that was never sent, and a trigger
+	// would be sent again.
+	noRedirects := *client
+	noRedirects.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+
+	resp, err := noRedirects.Do(req)
 	if err != nil {
 		// Network errors and the per-request timeout are transient. Whether the
 		// server saw the request is only certain when the connection was never made.
@@ -572,27 +581,35 @@ func (p *PipelineTriggerAction) doRequest(ctx context.Context, client *http.Clie
 	}
 	defer resp.Body.Close()
 
-	respBody, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return nil, "", &requestError{kind: httpretry.Transient, status: resp.StatusCode, err: fmt.Errorf("reading response body: %w", err)}
+	respBody, readErr := io.ReadAll(resp.Body)
+
+	if resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusCreated {
+		if readErr != nil {
+			return nil, "", &requestError{kind: httpretry.Transient, status: resp.StatusCode, err: fmt.Errorf("reading response body: %w", readErr)}
+		}
+		return respBody, resp.Header.Get("Content-Type"), nil
 	}
 
-	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusCreated {
-		retryAfter, _ := httpretry.RetryAfter(resp.Header, time.Now())
-		message := fmt.Sprintf("Azure DevOps API returned status %d: %s", resp.StatusCode, truncateBody(respBody))
-		if resp.StatusCode == http.StatusNonAuthoritativeInfo {
-			// A 203 is Azure DevOps' sign-in page for a credential it did not accept.
-			message += " (HTTP 203 means Azure DevOps did not accept the credential)"
-		}
-		return nil, "", &requestError{
-			kind:       httpretry.ClassifyStatus(resp.StatusCode),
-			status:     resp.StatusCode,
-			retryAfter: retryAfter,
-			err:        errors.New(message),
-		}
+	// The status and headers decide how to treat the failure, even when the
+	// body could not be read in full.
+	retryAfter, _ := httpretry.RetryAfter(resp.Header, time.Now())
+	message := fmt.Sprintf("Azure DevOps API returned status %d: %s", resp.StatusCode, truncateBody(respBody))
+	switch {
+	case resp.StatusCode == http.StatusNonAuthoritativeInfo:
+		// A 203 is Azure DevOps' sign-in page for a credential it did not accept.
+		message += " (HTTP 203 means Azure DevOps did not accept the credential)"
+	case resp.StatusCode >= 300 && resp.StatusCode < 400:
+		message += fmt.Sprintf(" (a redirect to %q, usually a sign-in page because the credential was not accepted)", truncateText(resp.Header.Get("Location")))
 	}
-
-	return respBody, resp.Header.Get("Content-Type"), nil
+	if readErr != nil {
+		message += fmt.Sprintf(" (the response body could not be read in full: %v)", readErr)
+	}
+	return nil, "", &requestError{
+		kind:       httpretry.ClassifyStatus(resp.StatusCode),
+		status:     resp.StatusCode,
+		retryAfter: retryAfter,
+		err:        errors.New(message),
+	}
 }
 
 // isJSONContentType reports whether a Content-Type header value is JSON
@@ -741,9 +758,13 @@ func (p *PipelineTriggerAction) triggerPipeline(ctx context.Context, response *a
 // triggerFailedError adds a warning to a trigger failure when the request may
 // have reached Azure DevOps and queued a run: it was sent and then timed out,
 // lost its connection or got a server error, or Azure DevOps accepted it (200 or
-// 201) but its response could not be read. Other statuses, including a 203
-// sign-in page, mean no run was queued.
+// 201) but its response could not be read. A redirect, which is not followed,
+// most likely means no run was queued, but the error still says how to check.
+// Other statuses, including a 203 sign-in page, mean no run was queued.
 func triggerFailedError(reqErr *requestError, pipelineDesc string) error {
+	if reqErr.status >= 300 && reqErr.status < 400 {
+		return fmt.Errorf("%w; Azure DevOps redirected the trigger request instead of answering it, so a run of %s was most likely not queued: if unsure, check the pipeline's runs before applying again", reqErr, pipelineDesc)
+	}
 	accepted := reqErr.status == http.StatusOK || reqErr.status == http.StatusCreated
 	if reqErr.notSent || (reqErr.status != 0 && reqErr.status < http.StatusInternalServerError && !accepted) {
 		return reqErr
@@ -787,11 +808,13 @@ func (p *PipelineTriggerAction) waitForPipelineRun(ctx context.Context, response
 		forceRefresh = false
 
 		if reqErr != nil {
+			// Record the failure before checking for the end of the wait, so a poll
+			// that ran into the deadline is the one the error reports.
+			lastErr = reqErr
+			failuresInARow++
 			if httpretry.IsParentDone(ctx) {
 				return nil, waitEndedError(ctx, run, statusURL, time.Since(started), lastErr, failuresInARow)
 			}
-			lastErr = reqErr
-			failuresInARow++
 
 			switch reqErr.kind {
 			case httpretry.Auth:
