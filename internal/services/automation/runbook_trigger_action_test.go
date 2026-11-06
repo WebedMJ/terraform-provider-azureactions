@@ -583,7 +583,10 @@ func TestRunbookTriggerAction_Invoke_PollTimeout(t *testing.T) {
 	a.Invoke(ctx, action.InvokeRequest{Config: cfg}, resp)
 
 	if !resp.Diagnostics.HasError() {
-		t.Error("expected diagnostics error for poll timeout, got none")
+		t.Fatal("expected diagnostics error for poll timeout, got none")
+	}
+	if detail := resp.Diagnostics[0].Detail(); !strings.Contains(detail, "may still be running") {
+		t.Errorf("timeout error should say the job may still be running, got: %s", detail)
 	}
 }
 

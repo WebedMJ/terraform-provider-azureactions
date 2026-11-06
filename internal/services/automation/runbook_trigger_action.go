@@ -202,7 +202,9 @@ func (r *RunbookTriggerAction) Invoke(ctx context.Context, request action.Invoke
 			Message: fmt.Sprintf("Waiting for runbook job to complete (timeout: %d minutes)", timeoutMinutes),
 		})
 
-		// Poll job status
+		// Poll job status. The go-azure-sdk client gets a current token for every
+		// request and retries network errors, throttling (429) and server errors
+		// (5xx) until the wait's deadline, so each poll is already resilient.
 		interval := r.pollInterval
 		if interval <= 0 {
 			interval = 10 * time.Second
@@ -213,7 +215,8 @@ func (r *RunbookTriggerAction) Invoke(ctx context.Context, request action.Invoke
 		for {
 			select {
 			case <-ctx.Done():
-				sdk.SetResponseErrorDiagnostic(response, "waiting for job completion", fmt.Sprintf("timeout waiting for job %s to complete", jobName))
+				sdk.SetResponseErrorDiagnostic(response, "waiting for job completion",
+					fmt.Sprintf("stopped waiting for job %s to complete (%v); the job was not stopped and may still be running", jobName, ctx.Err()))
 				return
 			case <-ticker.C:
 				jobResp, err := automationClient.Get(ctx, jobId, job.DefaultGetOperationOptions())
