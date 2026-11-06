@@ -45,27 +45,51 @@ func shortLivedToken(n int) azcore.AccessToken {
 	return azcore.AccessToken{Token: fmt.Sprintf("token-%d", n), ExpiresOn: time.Now().Add(time.Minute)}
 }
 
-// entraResponse builds the HTTP response an AuthenticationFailedError carries
-// when Microsoft Entra ID answered the token request.
-func entraResponse(status int) *http.Response {
+// entraResponseBody builds the HTTP response an AuthenticationFailedError
+// carries when Microsoft Entra ID answered the token request with body.
+func entraResponseBody(status int, body string) *http.Response {
 	req, _ := http.NewRequest(http.MethodPost, "https://login.microsoftonline.com/tenant/oauth2/v2.0/token", nil)
 	return &http.Response{
 		StatusCode: status,
 		Status:     fmt.Sprintf("%d %s", status, http.StatusText(status)),
 		Header:     http.Header{"Content-Type": []string{"application/json"}},
-		Body:       io.NopCloser(strings.NewReader(`{"error":"invalid_client","error_description":"AADSTS7000222: The provided client secret keys are expired."}`)),
+		Body:       io.NopCloser(strings.NewReader(body)),
 		Request:    req,
 	}
 }
 
+// entraOAuthResponse is an Entra ID token endpoint error response with the
+// given OAuth error code.
+func entraOAuthResponse(status int, code string) *http.Response {
+	return entraResponseBody(status, fmt.Sprintf(`{"error":%q,"error_description":"AADSTS00000: test","error_codes":[0]}`, code))
+}
+
+// entraResponse is an Entra ID rejection of an expired client secret.
+func entraResponse(status int) *http.Response {
+	return entraOAuthResponse(status, "invalid_client")
+}
+
 // TestPipelineTriggerAction_Wait_CredentialRejectedIsFatal verifies that a
-// definitive rejection by Microsoft Entra ID (an AuthenticationFailedError
-// carrying a 400, 401 or 403 response) ends the wait straight away.
+// definitive rejection by Microsoft Entra ID ends the wait straight away: an
+// AuthenticationFailedError carrying a 401 or 403, or a 400 with any OAuth
+// error other than temporarily_unavailable and server_error (including a code
+// the provider does not know and a body that is not an OAuth error).
 func TestPipelineTriggerAction_Wait_CredentialRejectedIsFatal(t *testing.T) {
 	t.Parallel()
 
-	for _, status := range []int{http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden} {
-		t.Run(fmt.Sprint(status), func(t *testing.T) {
+	cases := map[string]*http.Response{
+		"401 invalid_client":          entraOAuthResponse(http.StatusUnauthorized, "invalid_client"),
+		"403":                         entraOAuthResponse(http.StatusForbidden, "access_denied"),
+		"400 invalid_client":          entraOAuthResponse(http.StatusBadRequest, "invalid_client"),
+		"400 unauthorized_client":     entraOAuthResponse(http.StatusBadRequest, "unauthorized_client"),
+		"400 invalid_grant":           entraOAuthResponse(http.StatusBadRequest, "invalid_grant"),
+		"400 invalid_request":         entraOAuthResponse(http.StatusBadRequest, "invalid_request"),
+		"400 invalid_scope":           entraOAuthResponse(http.StatusBadRequest, "invalid_scope"),
+		"400 unknown code":            entraOAuthResponse(http.StatusBadRequest, "some_new_error"),
+		"400 not an OAuth error body": entraResponseBody(http.StatusBadRequest, "<html>Bad Request</html>"),
+	}
+	for name, entraResp := range cases {
+		t.Run(name, func(t *testing.T) {
 			t.Parallel()
 
 			srv := &scriptedServer{onPost: queued, onGet: func(_ int, w http.ResponseWriter) { writeRun(w, "inProgress", "unknown") }}
@@ -76,7 +100,7 @@ func TestPipelineTriggerAction_Wait_CredentialRejectedIsFatal(t *testing.T) {
 				if n <= 2 { // the up-front check and the trigger
 					return shortLivedToken(n), nil
 				}
-				return azcore.AccessToken{}, &azidentity.AuthenticationFailedError{RawResponse: entraResponse(status)}
+				return azcore.AccessToken{}, &azidentity.AuthenticationFailedError{RawResponse: entraResp}
 			}}
 			a := newRetryTestAction(server, credential, nil)
 
@@ -113,6 +137,8 @@ func TestPipelineTriggerAction_Wait_CredentialProblemRetried(t *testing.T) {
 	for name, credErr := range map[string]error{
 		"authentication failed without a response": &azidentity.AuthenticationFailedError{},
 		"Entra ID server error":                    &azidentity.AuthenticationFailedError{RawResponse: entraResponse(http.StatusServiceUnavailable)},
+		"Entra ID 400 temporarily_unavailable":     &azidentity.AuthenticationFailedError{RawResponse: entraOAuthResponse(http.StatusBadRequest, "temporarily_unavailable")},
+		"Entra ID 400 server_error":                &azidentity.AuthenticationFailedError{RawResponse: entraOAuthResponse(http.StatusBadRequest, "server_error")},
 		"credential unavailable":                   azidentity.NewCredentialUnavailableError("ManagedIdentityCredential: no response from the IMDS endpoint"),
 	} {
 		t.Run(name, func(t *testing.T) {
@@ -634,5 +660,156 @@ func TestPipelineTriggerAction_HTTPClient_UsesProxyFromEnvironment(t *testing.T)
 	transport, ok := (&PipelineTriggerAction{}).getHTTPClient().Transport.(*http.Transport)
 	if !ok || transport.Proxy == nil {
 		t.Fatal("the default transport should use the proxy from the environment")
+	}
+}
+
+// TestPipelineTriggerAction_CredentialErrorsAreTruncated verifies that a long
+// credential error (a whole Entra ID response body, or a credential chain's
+// report of every credential it tried) is shortened in progress messages and
+// in the final error, like an Azure DevOps error response.
+func TestPipelineTriggerAction_CredentialErrorsAreTruncated(t *testing.T) {
+	t.Parallel()
+
+	srv := &scriptedServer{onPost: queued, onGet: func(_ int, w http.ResponseWriter) { writeRun(w, "inProgress", "unknown") }}
+	server := httptest.NewServer(srv)
+	defer server.Close()
+
+	long := azidentity.NewCredentialUnavailableError("DefaultAzureCredential: failed to acquire a token. " + strings.Repeat("Attempted credentials: ... ", 300))
+	credential := &scriptedCredential{next: func(n int) (azcore.AccessToken, error) {
+		if n <= 2 { // the up-front check and the trigger
+			return shortLivedToken(n), nil
+		}
+		return azcore.AccessToken{}, long
+	}}
+	a := newRetryTestAction(server, credential, nil)
+
+	resp, progress := invokeWithin(t, a, waitConfig(t, authMethodDAC), 5*time.Second)
+	if !resp.Diagnostics.HasError() {
+		t.Fatal("expected the wait to stop after the credential failures")
+	}
+	limit := maxErrorBodyBytes + 400
+	for _, m := range progress {
+		if strings.Contains(m, "access token") && (len(m) > limit || !strings.Contains(m, "truncated")) {
+			t.Errorf("the credential error should be truncated in progress messages, got a %d-byte message", len(m))
+		}
+	}
+	if text := diagnosticsText(resp); len(text) > limit+400 || !strings.Contains(text, "truncated") {
+		t.Errorf("the credential error should be truncated in the final error, got %d bytes", len(text))
+	}
+}
+
+// slowCredential answers the first `fast` GetToken calls at once and blocks
+// every later call until its context ends, like a credential that never
+// answers.
+type slowCredential struct {
+	mu    sync.Mutex
+	calls int
+	fast  int
+}
+
+func (c *slowCredential) GetToken(ctx context.Context, _ policy.TokenRequestOptions) (azcore.AccessToken, error) {
+	c.mu.Lock()
+	c.calls++
+	n := c.calls
+	c.mu.Unlock()
+	if n <= c.fast {
+		return shortLivedToken(n), nil
+	}
+	<-ctx.Done()
+	return azcore.AccessToken{}, &azidentity.AuthenticationFailedError{}
+}
+
+// TestPipelineTriggerAction_TokenRequestTimeout verifies that a token request
+// that does not answer is cut off by its own timeout: before the trigger the
+// action fails instead of hanging, and while waiting the poll is retried like
+// any other failure to get a token, so the wait stops after the limit.
+func TestPipelineTriggerAction_TokenRequestTimeout(t *testing.T) {
+	t.Parallel()
+
+	t.Run("before the trigger", func(t *testing.T) {
+		t.Parallel()
+
+		srv := &scriptedServer{onPost: queued}
+		server := httptest.NewServer(srv)
+		defer server.Close()
+
+		a := newRetryTestAction(server, &slowCredential{fast: 0}, nil)
+		a.tokenRequestTimeout = 50 * time.Millisecond
+
+		start := time.Now()
+		resp, _ := invokeWithin(t, a, waitConfig(t, authMethodDAC), 5*time.Second)
+		if !resp.Diagnostics.HasError() {
+			t.Fatal("expected an error when the credential does not answer")
+		}
+		if elapsed := time.Since(start); elapsed > 2*time.Second {
+			t.Errorf("the token request should time out quickly, took %s", elapsed)
+		}
+		if posts, _ := srv.counts(); posts != 0 {
+			t.Errorf("nothing should be triggered without a token, got %d POSTs", posts)
+		}
+	})
+
+	t.Run("while waiting", func(t *testing.T) {
+		t.Parallel()
+
+		srv := &scriptedServer{onPost: queued, onGet: func(_ int, w http.ResponseWriter) { writeRun(w, "inProgress", "unknown") }}
+		server := httptest.NewServer(srv)
+		defer server.Close()
+
+		credential := &slowCredential{fast: 2} // the up-front check and the trigger
+		a := newRetryTestAction(server, credential, nil)
+		a.tokenRequestTimeout = 50 * time.Millisecond
+
+		resp, _ := invokeWithin(t, a, waitConfig(t, authMethodDAC), 5*time.Second)
+		if !resp.Diagnostics.HasError() {
+			t.Fatal("expected the wait to stop after the token requests timed out")
+		}
+		text := diagnosticsText(resp)
+		if !strings.Contains(text, fmt.Sprintf("%d times in a row", credentialFailureLimit)) {
+			t.Errorf("the timed-out token requests should count as credential failures, got: %s", text)
+		}
+		if _, gets := srv.counts(); gets != 0 {
+			t.Errorf("no poll can be sent without a token, got %d", gets)
+		}
+	})
+}
+
+// TestPipelineTriggerAction_Wait_401ResetsCredentialFailures verifies that a
+// 401 from Azure DevOps resets the count of failures to get a token (a token
+// was obtained), so earlier credential failures and one after the 401 do not
+// add up to the limit.
+func TestPipelineTriggerAction_Wait_401ResetsCredentialFailures(t *testing.T) {
+	t.Parallel()
+
+	srv := &scriptedServer{onPost: queued, onGet: func(n int, w http.ResponseWriter) {
+		if n == 1 {
+			writeStatus(w, http.StatusUnauthorized)
+			return
+		}
+		writeRun(w, "completed", "succeeded")
+	}}
+	server := httptest.NewServer(srv)
+	defer server.Close()
+
+	// Calls: 1 up-front check, 2 trigger, 3..(limit+1) fail (limit-1 polls in a
+	// row), then a token for the poll that gets the 401, then the forced
+	// refresh fails, then a token for the poll that succeeds.
+	failFrom, failTo := 3, credentialFailureLimit+1
+	tokenFor401 := failTo + 1
+	refreshFails := tokenFor401 + 1
+	credential := &scriptedCredential{next: func(n int) (azcore.AccessToken, error) {
+		if (n >= failFrom && n <= failTo) || n == refreshFails {
+			return azcore.AccessToken{}, &azidentity.AuthenticationFailedError{}
+		}
+		return shortLivedToken(n), nil
+	}}
+	a := newRetryTestAction(server, credential, nil)
+
+	resp, _ := invokeWithin(t, a, waitConfig(t, authMethodDAC), 5*time.Second)
+	if resp.Diagnostics.HasError() {
+		t.Fatalf("the 401 should reset the credential failure count, got: %s", diagnosticsText(resp))
+	}
+	if _, gets := srv.counts(); gets != 2 {
+		t.Errorf("status polls = %d, want 2 (the 401 and the success)", gets)
 	}
 }

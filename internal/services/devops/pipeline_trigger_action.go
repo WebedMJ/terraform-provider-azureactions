@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Azure/azure-sdk-for-go/sdk/azcore/runtime"
 	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/WebedMJ/terraform-provider-azureactions/internal/httpretry"
 	"github.com/WebedMJ/terraform-provider-azureactions/internal/sdk"
@@ -55,9 +56,15 @@ const (
 	// action waiting until timeout_minutes runs out.
 	credentialFailureLimit = 5
 
-	// maxErrorBodyBytes limits how much of an error response body goes into
-	// error and progress messages (a gateway's HTML error page can be several KB).
+	// maxErrorBodyBytes limits how much of an error response body, or of a
+	// credential error, goes into error and progress messages (a gateway's HTML
+	// error page or a credential chain's report can be several KB).
 	maxErrorBodyBytes = 512
+
+	// tokenRequestTimeout bounds one request for an access token, so a slow
+	// credential (an Azure CLI process, a managed identity endpoint that does
+	// not answer) cannot hold the trigger or a poll indefinitely.
+	tokenRequestTimeout = time.Minute
 )
 
 // PipelineTriggerAction implements sdk.Action for triggering an Azure DevOps
@@ -71,12 +78,14 @@ type PipelineTriggerAction struct {
 	// pollInterval is used in tests to override the default polling interval.
 	// A zero value uses defaultPollSeconds.
 	pollInterval time.Duration
-	// requestTimeout, maxRetryDelay and maxRetryAfter are used in tests to
-	// shorten the per-request timeout and the retry delays. Zero values use
-	// httpRequestTimeout, defaultMaxRetryDelay and defaultMaxRetryAfter.
-	requestTimeout time.Duration
-	maxRetryDelay  time.Duration
-	maxRetryAfter  time.Duration
+	// requestTimeout, tokenRequestTimeout, maxRetryDelay and maxRetryAfter are
+	// used in tests to shorten the per-request and token request timeouts and
+	// the retry delays. Zero values use httpRequestTimeout, tokenRequestTimeout,
+	// defaultMaxRetryDelay and defaultMaxRetryAfter.
+	requestTimeout      time.Duration
+	tokenRequestTimeout time.Duration
+	maxRetryDelay       time.Duration
+	maxRetryAfter       time.Duration
 	// timeoutUnit is used in tests to shorten timeout_minutes. A zero value
 	// uses time.Minute.
 	timeoutUnit time.Duration
@@ -372,7 +381,9 @@ func (p *PipelineTriggerAction) resolveAuthSource(ctx context.Context, model Pip
 		}
 
 		source := &credentialAuthHeader{credential: p.Client.Credential}
-		if _, err := source.Header(ctx, false); err != nil {
+		tokenCtx, cancel := context.WithTimeout(ctx, p.getTokenRequestTimeout())
+		defer cancel()
+		if _, err := source.Header(tokenCtx, false); err != nil {
 			return nil, err
 		}
 		return source, nil
@@ -472,6 +483,13 @@ func (p *PipelineTriggerAction) getRequestTimeout() time.Duration {
 	return httpRequestTimeout
 }
 
+func (p *PipelineTriggerAction) getTokenRequestTimeout() time.Duration {
+	if p.tokenRequestTimeout > 0 {
+		return p.tokenRequestTimeout
+	}
+	return tokenRequestTimeout
+}
+
 func (p *PipelineTriggerAction) getMaxRetryDelay() time.Duration {
 	if p.maxRetryDelay > 0 {
 		return p.maxRetryDelay
@@ -500,18 +518,25 @@ func (p *PipelineTriggerAction) retryDelay(err *requestError, attempt int, base 
 // header and a per-request timeout, and returns the response body for a 200 or
 // 201. Any failure is returned as a *requestError that says how to treat it.
 func (p *PipelineTriggerAction) doRequest(ctx context.Context, client *http.Client, method, url string, auth authHeaderSource, forceRefresh bool, body []byte) ([]byte, *requestError) {
-	header, err := auth.Header(ctx, forceRefresh)
+	tokenCtx, cancelToken := context.WithTimeout(ctx, p.getTokenRequestTimeout())
+	header, err := auth.Header(tokenCtx, forceRefresh)
+	cancelToken()
 	if err != nil {
 		// The request was never sent. Only a definitive rejection by Microsoft
 		// Entra ID is fatal straight away; everything else (a network problem
 		// reaching Entra ID or the managed identity endpoint, an Azure CLI
-		// failure) is retried, and the wait limits how many times in a row.
+		// failure, the token request timing out) is retried, and the wait limits
+		// how many times in a row.
 		kind := httpretry.Transient
+		message := "getting an Azure DevOps access token"
 		if credentialRejected(err) {
 			kind = httpretry.Fatal
-			err = fmt.Errorf("Microsoft Entra ID rejected the Azure credential's request for an Azure DevOps access token: %w", err)
+			message = "Microsoft Entra ID rejected the Azure credential's request for an Azure DevOps access token"
 		}
-		return nil, &requestError{kind: kind, notSent: true, credential: true, err: err}
+		// The identity library's message can include a whole response body or a
+		// report of every credential a chain tried, so it is shortened like an
+		// Azure DevOps error response.
+		return nil, &requestError{kind: kind, notSent: true, credential: true, err: fmt.Errorf("%s: %s", message, truncateText(err.Error()))}
 	}
 
 	reqCtx, cancel := context.WithTimeout(ctx, p.getRequestTimeout())
@@ -557,8 +582,10 @@ func (p *PipelineTriggerAction) doRequest(ctx context.Context, client *http.Clie
 }
 
 // credentialRejected reports whether err shows that Microsoft Entra ID answered
-// the token request with a definitive rejection (HTTP 400, 401 or 403, for
-// example an expired client secret, an unknown client or revoked consent).
+// the token request with a definitive rejection: HTTP 401 or 403, or HTTP 400
+// with an OAuth error other than temporarily_unavailable or server_error (for
+// example invalid_client for an expired client secret, invalid_grant for
+// revoked consent, or a code this provider does not know).
 //
 // The Azure identity library marks nearly all of its errors as not retriable,
 // including failures to reach Entra ID or the managed identity endpoint and any
@@ -570,20 +597,50 @@ func credentialRejected(err error) bool {
 		return false
 	}
 	switch authErr.RawResponse.StatusCode {
-	case http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden:
+	case http.StatusUnauthorized, http.StatusForbidden:
 		return true
+	case http.StatusBadRequest:
+		// Entra ID returns every OAuth error as a 400, including the two that
+		// mean "try again later".
+		switch oauthErrorCode(authErr.RawResponse) {
+		case "temporarily_unavailable", "server_error":
+			return false
+		default:
+			return true
+		}
 	default:
 		return false
 	}
 }
 
+// oauthErrorCode returns the OAuth "error" field of a token endpoint response,
+// or "" when the body cannot be read or has no such field.
+func oauthErrorCode(resp *http.Response) string {
+	body, err := runtime.Payload(resp)
+	if err != nil {
+		return ""
+	}
+	var oauthErr struct {
+		Error string `json:"error"`
+	}
+	if json.Unmarshal(body, &oauthErr) != nil {
+		return ""
+	}
+	return oauthErr.Error
+}
+
 // truncateBody returns a response body for an error message, cut to
 // maxErrorBodyBytes.
 func truncateBody(body []byte) string {
-	if len(body) <= maxErrorBodyBytes {
-		return string(body)
+	return truncateText(string(body))
+}
+
+// truncateText cuts text for an error or progress message to maxErrorBodyBytes.
+func truncateText(text string) string {
+	if len(text) <= maxErrorBodyBytes {
+		return text
 	}
-	return fmt.Sprintf("%s... (%d bytes, truncated)", body[:maxErrorBodyBytes], len(body))
+	return fmt.Sprintf("%s... (%d bytes, truncated)", text[:maxErrorBodyBytes], len(text))
 }
 
 // triggerPipeline sends the POST request to the Azure DevOps Pipelines API
@@ -705,6 +762,8 @@ func (p *PipelineTriggerAction) waitForPipelineRun(ctx context.Context, response
 					return nil, waitStoppedError(run, statusURL, fmt.Errorf("polling pipeline run %d status: still unauthorised after re-requesting the access token: %w", run.ID, reqErr))
 				}
 				authRetries++
+				// A 401 means a token was obtained, so the credential is working.
+				credentialFailures = 0
 				forceRefresh = true
 				response.SendProgress(action.InvokeProgressEvent{
 					Message: fmt.Sprintf("Polling pipeline run %d: Azure DevOps rejected the access token (HTTP 401); re-requesting the token and retrying once", run.ID),

@@ -229,7 +229,8 @@ func (r *RunbookTriggerAction) Invoke(ctx context.Context, request action.Invoke
 							fmt.Sprintf("stopped waiting for job %s to complete (%v); the job was not stopped and may still be running; last status check error: %v", jobName, ctx.Err(), err))
 						return
 					}
-					sdk.SetResponseErrorDiagnostic(response, "checking job status", fmt.Sprintf("failed to get job status: %v", err))
+					sdk.SetResponseErrorDiagnostic(response, "checking job status",
+						fmt.Sprintf("failed to get the status of job %s: %v; stopped waiting, but the job was not stopped and may still be running", jobName, err))
 					return
 				}
 

@@ -493,6 +493,50 @@ func TestRunbookTriggerAction_Invoke_PollError(t *testing.T) {
 	}
 }
 
+// TestRunbookTriggerAction_Invoke_PollErrorSaysJobMayStillBeRunning verifies
+// that a status check that fails before the wait runs out (here a 404, which is
+// not retried) says the job was not stopped and may still be running.
+func TestRunbookTriggerAction_Invoke_PollErrorSaysJobMayStillBeRunning(t *testing.T) {
+	t.Parallel()
+
+	mux := http.NewServeMux()
+	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
+		if !strings.Contains(r.URL.Path, "/jobs/") {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		switch r.Method {
+		case http.MethodPut:
+			w.WriteHeader(http.StatusCreated)
+			_, _ = w.Write(jobResponse("New"))
+		case http.MethodGet:
+			w.WriteHeader(http.StatusNotFound)
+			_, _ = w.Write([]byte(`{"error":{"code":"NotFound","message":"job not found"}}`))
+		default:
+			w.WriteHeader(http.StatusMethodNotAllowed)
+		}
+	})
+	server := httptest.NewServer(mux)
+	defer server.Close()
+
+	a := newTestAction(server.URL)
+	waitTrue := true
+	timeoutMins := int64(1)
+	cfg := buildConfig(t, "test-account", "test-rg", "TestRunbook", &waitTrue, &timeoutMins)
+	resp, _ := invokeAction(t, a, cfg)
+
+	if !resp.Diagnostics.HasError() {
+		t.Fatal("expected a diagnostics error for the failed status check")
+	}
+	detail := resp.Diagnostics[0].Detail()
+	for _, want := range []string{"failed to get the status of job", "may still be running"} {
+		if !strings.Contains(detail, want) {
+			t.Errorf("error should contain %q, got: %s", want, detail)
+		}
+	}
+}
+
 // TestRunbookTriggerAction_Invoke_WithParameters tests that runbook parameters
 // are serialised and included in the job creation request body.
 func TestRunbookTriggerAction_Invoke_WithParameters(t *testing.T) {
