@@ -13,6 +13,10 @@ description: |-
 
 {{ tffile "examples/actions/automation_runbook_trigger/action.tf" }}
 
+## Waiting for completion
+
+With `wait_for_completion = true` the action polls the job until it completes. Every request uses a current access token, and network errors, throttling (HTTP 429) and server errors (HTTP 5xx) are retried by the Azure SDK within the time left on `timeout_minutes`. When it runs out, including while a status check is still being retried, the action fails but the job is not stopped and may still be running; the error then also gives the last status check error. A status check that fails for any other reason also ends the wait, and its error says the job was not stopped and may still be running.
+
 <!-- markdownlint-disable MD022 MD033 -->
 {{ .SchemaMarkdown | trimspace }}
 <!-- markdownlint-enable MD022 MD033 -->

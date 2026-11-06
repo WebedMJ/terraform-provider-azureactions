@@ -299,6 +299,7 @@ For this provider, operational result details are emitted via action progress ev
 
 - Azure DevOps pipeline trigger emits run ID and initial state.
 - When `wait_for_completion = true`, it also emits final state and result.
+- While waiting, each status poll uses a current access token, transient errors are retried and reported as progress messages, and if `timeout_minutes` runs out the run is not cancelled. See [Retries and waiting](docs/actions/devops_pipeline_trigger.md#retries-and-waiting).
 
 > **Security note (DevOps PAT):** Action schema attributes in Terraform 1.14+ do not support the `sensitive` flag. Always supply `personal_access_token` via a Terraform [sensitive variable](https://developer.hashicorp.com/terraform/language/values/variables#suppressing-values-in-cli-output) (`sensitive = true`) or a `TF_VAR_` environment variable to prevent the value appearing in plan/apply output.
 

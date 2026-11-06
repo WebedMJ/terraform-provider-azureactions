@@ -77,7 +77,7 @@ changelog:
       regexp: '^.*?feat(\(.+\))?!?:.+$'
       order: 100
     - title: Bug fixes
-      regexp: '^.*?bug(\(.+\))?!?:.+$'
+      regexp: '^.*?(bug|fix)(\(.+\))?!?:.+$'
       order: 200
     - title: Documentation
       regexp: '^.*?docs?(\(.+\))?!?:.+$'
