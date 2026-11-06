@@ -62,6 +62,41 @@ func TestIsNotSent(t *testing.T) {
 	if IsNotSent(nil) {
 		t.Error("nil is not an error")
 	}
+
+	// net/http wraps a failure to reach an HTTP proxy in a "proxyconnect" error.
+	proxyDialErr := &url.Error{Op: "Post", URL: "https://example", Err: &net.OpError{Op: "proxyconnect", Net: "tcp",
+		Err: &net.OpError{Op: "dial", Net: "tcp", Err: syscall.ECONNREFUSED}}}
+	if !IsNotSent(proxyDialErr) {
+		t.Error("a refused connection to the proxy should count as not sent")
+	}
+	proxyOtherErr := &url.Error{Op: "Post", URL: "https://example", Err: &net.OpError{Op: "proxyconnect", Net: "tcp", Err: syscall.ECONNRESET}}
+	if IsNotSent(proxyOtherErr) {
+		t.Error("a proxy error that does not wrap a dial error must not count as not sent")
+	}
+}
+
+// TestIsNotSent_RealProxyRefused checks the error net/http actually returns
+// when the configured proxy refuses the connection.
+func TestIsNotSent_RealProxyRefused(t *testing.T) {
+	t.Parallel()
+
+	// A port that nothing listens on: open and close a listener.
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	addr := listener.Addr().String()
+	_ = listener.Close()
+
+	proxyURL, _ := url.Parse("http://" + addr)
+	client := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)}}
+	_, err = client.Get("https://dev.azure.com.invalid/")
+	if err == nil {
+		t.Fatal("expected the request to fail")
+	}
+	if !IsNotSent(err) {
+		t.Errorf("a refused proxy connection should count as not sent, got %#v", err)
+	}
 }
 
 func TestIsParentDone(t *testing.T) {

@@ -65,7 +65,8 @@ func ClassifyStatus(code int) Kind {
 // IsNotSent reports whether err shows that a request never reached the server:
 // the connection could not be opened (for example connection refused) or the
 // host name could not be resolved. Only these errors make it safe to retry a
-// request that is not idempotent.
+// request that is not idempotent. Through an HTTP proxy, a failure to connect to
+// the proxy ("proxyconnect" wrapping a dial error) also counts.
 func IsNotSent(err error) bool {
 	if err == nil {
 		return false
@@ -77,8 +78,15 @@ func IsNotSent(err error) bool {
 	}
 
 	var opErr *net.OpError
-	if errors.As(err, &opErr) && opErr.Op == "dial" {
-		return true
+	for target := err; errors.As(target, &opErr); target = opErr.Err {
+		switch opErr.Op {
+		case "dial":
+			return true
+		case "proxyconnect":
+			continue
+		default:
+			return false
+		}
 	}
 
 	return false

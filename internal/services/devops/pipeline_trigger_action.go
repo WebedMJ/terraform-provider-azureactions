@@ -17,6 +17,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Azure/azure-sdk-for-go/sdk/azidentity"
 	"github.com/WebedMJ/terraform-provider-azureactions/internal/httpretry"
 	"github.com/WebedMJ/terraform-provider-azureactions/internal/sdk"
 	"github.com/hashicorp/terraform-plugin-framework/action"
@@ -46,6 +47,13 @@ const (
 	triggerRetryBaseDelay  = 2 * time.Second
 	triggerMaxAttempts     = 3 // all trigger attempts, including a retry after a 401
 	unauthorizedRetryLimit = 1 // a 401 is retried once after re-requesting the token
+
+	// credentialFailureLimit is how many polls in a row may fail because the
+	// Azure credential could not get a token before the wait stops. With the
+	// backoff that is a few minutes: long enough for a passing problem reaching
+	// Microsoft Entra ID, short enough that an expired sign-in does not keep the
+	// action waiting until timeout_minutes runs out.
+	credentialFailureLimit = 5
 
 	// maxErrorBodyBytes limits how much of an error response body goes into
 	// error and progress messages (a gateway's HTML error page can be several KB).
@@ -136,6 +144,7 @@ type requestError struct {
 	status     int           // HTTP status, 0 when no response was received
 	retryAfter time.Duration // server-supplied Retry-After, 0 when absent
 	notSent    bool          // the request never reached the server
+	credential bool          // the Azure credential could not get a token, so nothing was sent
 	err        error
 }
 
@@ -265,8 +274,12 @@ func (p *PipelineTriggerAction) Invoke(ctx context.Context, request action.Invok
 		Message: fmt.Sprintf("Triggering pipeline %d in project %s (org: %s)", pipelineID, project, orgURL),
 	})
 
-	// One client for the whole invocation, so polls reuse connections.
+	// One client for the whole invocation, so polls reuse connections. The
+	// default client's idle connections are closed when the action ends.
 	client := p.getHTTPClient()
+	if p.httpClient == nil {
+		defer client.CloseIdleConnections()
+	}
 
 	pipelineDesc := fmt.Sprintf("pipeline %d in project %s (%s)", pipelineID, model.Project.ValueString(), orgURL)
 	run, err := p.triggerPipeline(ctx, response, client, triggerURL, auth, body, pipelineDesc)
@@ -489,18 +502,16 @@ func (p *PipelineTriggerAction) retryDelay(err *requestError, attempt int, base 
 func (p *PipelineTriggerAction) doRequest(ctx context.Context, client *http.Client, method, url string, auth authHeaderSource, forceRefresh bool, body []byte) ([]byte, *requestError) {
 	header, err := auth.Header(ctx, forceRefresh)
 	if err != nil {
-		// The request was never sent. A credential that cannot authenticate
-		// (expired sign-in, revoked consent, missing configuration) will not
-		// recover by waiting: the Azure identity library has already retried
-		// passing failures and marks these errors as not retriable. Anything
-		// else (for example a network problem reaching Entra ID) is retried.
+		// The request was never sent. Only a definitive rejection by Microsoft
+		// Entra ID is fatal straight away; everything else (a network problem
+		// reaching Entra ID or the managed identity endpoint, an Azure CLI
+		// failure) is retried, and the wait limits how many times in a row.
 		kind := httpretry.Transient
-		var nonRetriable interface{ NonRetriable() }
-		if errors.As(err, &nonRetriable) {
+		if credentialRejected(err) {
 			kind = httpretry.Fatal
-			err = fmt.Errorf("the Azure credential cannot get an Azure DevOps access token: %w", err)
+			err = fmt.Errorf("Microsoft Entra ID rejected the Azure credential's request for an Azure DevOps access token: %w", err)
 		}
-		return nil, &requestError{kind: kind, notSent: true, err: err}
+		return nil, &requestError{kind: kind, notSent: true, credential: true, err: err}
 	}
 
 	reqCtx, cancel := context.WithTimeout(ctx, p.getRequestTimeout())
@@ -543,6 +554,27 @@ func (p *PipelineTriggerAction) doRequest(ctx context.Context, client *http.Clie
 	}
 
 	return respBody, nil
+}
+
+// credentialRejected reports whether err shows that Microsoft Entra ID answered
+// the token request with a definitive rejection (HTTP 400, 401 or 403, for
+// example an expired client secret, an unknown client or revoked consent).
+//
+// The Azure identity library marks nearly all of its errors as not retriable,
+// including failures to reach Entra ID or the managed identity endpoint and any
+// Azure CLI failure, so that marker cannot tell a rejection from a passing
+// problem. A response from Entra ID can.
+func credentialRejected(err error) bool {
+	var authErr *azidentity.AuthenticationFailedError
+	if !errors.As(err, &authErr) || authErr.RawResponse == nil {
+		return false
+	}
+	switch authErr.RawResponse.StatusCode {
+	case http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden:
+		return true
+	default:
+		return false
+	}
 }
 
 // truncateBody returns a response body for an error message, cut to
@@ -594,7 +626,7 @@ func (p *PipelineTriggerAction) triggerPipeline(ctx context.Context, response *a
 				Message: "Azure DevOps rejected the access token (HTTP 401); re-requesting the token and retrying the trigger once",
 			})
 
-		case attempt < triggerMaxAttempts && (reqErr.notSent || reqErr.status == http.StatusTooManyRequests):
+		case reqErr.kind != httpretry.Fatal && attempt < triggerMaxAttempts && (reqErr.notSent || reqErr.status == http.StatusTooManyRequests):
 			delay := p.retryDelay(reqErr, attempt, triggerRetryBaseDelay)
 			response.SendProgress(action.InvokeProgressEvent{
 				Message: fmt.Sprintf("Triggering the pipeline failed before a run could be queued (attempt %d of %d): %v; retrying in %s",
@@ -612,9 +644,11 @@ func (p *PipelineTriggerAction) triggerPipeline(ctx context.Context, response *a
 
 // triggerFailedError adds a warning to a trigger failure when the request may
 // have reached Azure DevOps and queued a run: it was sent and then timed out,
-// lost its connection or got a server error.
+// lost its connection or got a server error, or Azure DevOps accepted it (2xx)
+// but its response could not be read.
 func triggerFailedError(reqErr *requestError, pipelineDesc string) error {
-	if reqErr.notSent || (reqErr.status != 0 && reqErr.status < http.StatusInternalServerError) {
+	accepted := reqErr.status >= http.StatusOK && reqErr.status < http.StatusMultipleChoices
+	if reqErr.notSent || (reqErr.status != 0 && reqErr.status < http.StatusInternalServerError && !accepted) {
 		return reqErr
 	}
 	return fmt.Errorf("%w; the request may have reached Azure DevOps and a run of %s may have been queued: check the pipeline's runs before applying again", reqErr, pipelineDesc)
@@ -634,6 +668,7 @@ func (p *PipelineTriggerAction) waitForPipelineRun(ctx context.Context, response
 
 	started := time.Now()
 	transientFailures := 0
+	credentialFailures := 0
 	authRetries := 0
 	forceRefresh := false
 	// The last poll error and how many polls in a row have failed, for the
@@ -664,10 +699,10 @@ func (p *PipelineTriggerAction) waitForPipelineRun(ctx context.Context, response
 			switch reqErr.kind {
 			case httpretry.Auth:
 				if !auth.canRefresh() {
-					return nil, fmt.Errorf("polling pipeline run %d status: Azure DevOps rejected the personal access token: %w", run.ID, reqErr)
+					return nil, waitStoppedError(run, statusURL, fmt.Errorf("polling pipeline run %d status: Azure DevOps rejected the personal access token: %w", run.ID, reqErr))
 				}
 				if authRetries >= unauthorizedRetryLimit {
-					return nil, fmt.Errorf("polling pipeline run %d status: still unauthorised after re-requesting the access token: %w", run.ID, reqErr)
+					return nil, waitStoppedError(run, statusURL, fmt.Errorf("polling pipeline run %d status: still unauthorised after re-requesting the access token: %w", run.ID, reqErr))
 				}
 				authRetries++
 				forceRefresh = true
@@ -677,6 +712,17 @@ func (p *PipelineTriggerAction) waitForPipelineRun(ctx context.Context, response
 				timer.Reset(0)
 
 			case httpretry.Transient:
+				// A 401 is only fatal when it directly follows another 401.
+				authRetries = 0
+				if reqErr.credential {
+					credentialFailures++
+					if credentialFailures >= credentialFailureLimit {
+						return nil, waitStoppedError(run, statusURL, fmt.Errorf("polling pipeline run %d status: the Azure credential could not get an Azure DevOps access token %d times in a row: %w",
+							run.ID, credentialFailures, reqErr))
+					}
+				} else {
+					credentialFailures = 0
+				}
 				transientFailures++
 				delay := p.retryDelay(reqErr, transientFailures, interval)
 				response.SendProgress(action.InvokeProgressEvent{
@@ -686,12 +732,13 @@ func (p *PipelineTriggerAction) waitForPipelineRun(ctx context.Context, response
 				timer.Reset(delay)
 
 			default:
-				return nil, fmt.Errorf("polling pipeline run %d status: %w", run.ID, reqErr)
+				return nil, waitStoppedError(run, statusURL, fmt.Errorf("polling pipeline run %d status: %w", run.ID, reqErr))
 			}
 			continue
 		}
 
 		transientFailures = 0
+		credentialFailures = 0
 		authRetries = 0
 		lastErr = nil
 		failuresInARow = 0
@@ -725,10 +772,7 @@ func (p *PipelineTriggerAction) waitForPipelineRun(ctx context.Context, response
 // the last polls failed it adds the last poll error and how many polls in a row
 // failed, because that is usually why the run's result was never seen.
 func waitEndedError(ctx context.Context, run *pipelineRunResponse, statusURL string, waited time.Duration, lastErr *requestError, failuresInARow int) error {
-	where := run.Links.Web.Href
-	if where == "" {
-		where = statusURL
-	}
+	where := runLink(run, statusURL)
 
 	reason := "the wait was cancelled"
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
@@ -742,6 +786,22 @@ func waitEndedError(ctx context.Context, run *pipelineRunResponse, statusURL str
 
 	return fmt.Errorf("stopped waiting for pipeline run %d after %s (%s); the run was not cancelled and may still be running: %s%s: %w",
 		run.ID, waited.Round(time.Second), reason, where, lastPoll, ctx.Err())
+}
+
+// waitStoppedError is the error for a poll failure that ends the wait (anything
+// but the timeout or a cancel, see waitEndedError). The pipeline run is not
+// cancelled, so the error says it may still be running and where to look.
+func waitStoppedError(run *pipelineRunResponse, statusURL string, err error) error {
+	return fmt.Errorf("%w; stopped waiting: pipeline run %d was not cancelled and may still be running: %s", err, run.ID, runLink(run, statusURL))
+}
+
+// runLink returns the run's web link, or the status URL when Azure DevOps did
+// not return one.
+func runLink(run *pipelineRunResponse, statusURL string) string {
+	if run.Links.Web.Href != "" {
+		return run.Links.Web.Href
+	}
+	return statusURL
 }
 
 // getPipelineRun fetches the current state of a pipeline run.
