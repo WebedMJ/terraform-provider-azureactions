@@ -13,6 +13,17 @@ description: |-
 
 {{ tffile "examples/actions/devops_pipeline_trigger/action.tf" }}
 
+## Retries and waiting
+
+**Triggering the run.** Queuing a pipeline run is not idempotent, so the trigger request is only retried when Azure DevOps cannot have queued a run: the connection was never made (for example the connection was refused or the host name did not resolve), the request was throttled (HTTP 429, honouring `Retry-After`), or the credentials were rejected (HTTP 401, retried once; with `default_azure_credential` a new token is requested first). It makes at most 3 attempts in total. A server error or a timeout after the request was sent is not retried, because a run may already have been queued; check the pipeline's runs before applying again.
+
+**Waiting for completion.** With `wait_for_completion = true` the action polls the run until it completes:
+
+- Every request uses a current access token. With `default_azure_credential` the token is reused until 5 minutes before it expires and then replaced, so a wait longer than the token's lifetime keeps working. A 401 during polling is retried once (with `default_azure_credential`, with a new token); a second 401 in a row fails the action.
+- Transient poll errors (network errors, a request that times out, HTTP 408, 429, 500, 502, 503, 504) are retried with exponential backoff and jitter, starting at the poll interval and capped at 2 minutes. A `Retry-After` header is honoured (up to 5 minutes). Each retry is reported as a progress message.
+- Any other error (for example HTTP 400, 403 or 404, or a response that cannot be read) fails the action straight away.
+- `timeout_minutes` starts once the run has been queued, so time the run spends waiting for an agent counts against it. When it runs out, the action fails but the pipeline run is not cancelled: the error gives the run's link, and the run may still be running.
+
 <!-- markdownlint-disable MD022 MD033 -->
 {{ .SchemaMarkdown | trimspace }}
 <!-- markdownlint-enable MD022 MD033 -->
