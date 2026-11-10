@@ -117,6 +117,7 @@ type PipelineTriggerActionModel struct {
 	StagesToSkip        types.List   `tfsdk:"stages_to_skip"`
 	WaitForCompletion   types.Bool   `tfsdk:"wait_for_completion"`
 	TimeoutMinutes      types.Int64  `tfsdk:"timeout_minutes"`
+	Enabled             types.Bool   `tfsdk:"enabled"`
 }
 
 // pipelineRunRequest is serialised as the body of the DevOps Pipelines Run API call.
@@ -227,6 +228,13 @@ func (p *PipelineTriggerAction) Schema(_ context.Context, _ action.SchemaRequest
 					"The time starts once the run has been queued, so time the run spends waiting for an agent counts against it. " +
 					"When it runs out the action fails, but the pipeline run is not cancelled and may still be running.",
 			},
+			"enabled": schema.BoolAttribute{
+				Optional: true,
+				MarkdownDescription: "Whether the action triggers the pipeline. Defaults to true. When false, the action does nothing " +
+					"when it is invoked: it reports that the pipeline was not triggered and succeeds, without requesting a token or " +
+					"calling Azure DevOps. Use it to switch a trigger on or off from a variable, for example in an `action_trigger` " +
+					"whose `actions` list must be static.",
+			},
 		},
 	}
 }
@@ -250,6 +258,22 @@ func (p *PipelineTriggerAction) Invoke(ctx context.Context, request action.Invok
 	if authMethod != authMethodPAT && authMethod != authMethodSP && authMethod != authMethodDAC {
 		sdk.SetResponseErrorDiagnostic(response, "invalid auth_method",
 			fmt.Sprintf("auth_method must be %q, %q, or %q, got %q", authMethodPAT, authMethodDAC, authMethodSP, authMethod))
+		return
+	}
+
+	// A disabled trigger does nothing: no token is requested and Azure DevOps
+	// is never called. The configuration is still checked above, so a mistake
+	// shows up before the trigger is enabled.
+	if model.Enabled.IsUnknown() {
+		sdk.SetResponseErrorDiagnostic(response, "invalid enabled",
+			"enabled must be known when the action is invoked")
+		return
+	}
+	if !model.Enabled.IsNull() && !model.Enabled.ValueBool() {
+		response.SendProgress(action.InvokeProgressEvent{
+			Message: fmt.Sprintf("Not triggering pipeline %d in project %s: enabled is false",
+				model.PipelineID.ValueInt64(), model.Project.ValueString()),
+		})
 		return
 	}
 
