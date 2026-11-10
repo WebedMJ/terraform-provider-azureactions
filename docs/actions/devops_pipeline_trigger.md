@@ -68,6 +68,47 @@ action "azureactions_devops_pipeline_trigger" "example" {
 }
 ```
 
+## Switching the trigger on or off
+
+Set `enabled = false` to make an invocation do nothing: the action reports that it did not trigger the pipeline and succeeds, without requesting a token or calling Azure DevOps. The rest of the configuration is still checked (`auth_method`, `personal_access_token` with `auth_method = "pat"`, `pipeline_id`, the provider's `organization_url` and the run settings), so a mistake shows up before the trigger is enabled. `enabled` must be known when the action runs.
+
+Use it to switch an action on or off from a variable. An `action_trigger`'s `actions` list must be static, and from Terraform 1.16 a `condition` that refers to a variable or local value makes `terraform plan -destroy` and `terraform destroy` fail with "Reference to uninitialized variable" (a destroy plan evaluates the conditions of `after_create` triggers without the values they refer to). `enabled` is in the action's configuration, which a destroy plan does not evaluate for those triggers:
+
+```terraform
+resource "terraform_data" "example" {
+  lifecycle {
+    action_trigger {
+      events = [after_create]
+      # The optional action runs first: actions run in list order
+      actions = [
+        action.azureactions_devops_pipeline_trigger.optional,
+        action.azureactions_devops_pipeline_trigger.always,
+      ]
+    }
+  }
+}
+
+action "azureactions_devops_pipeline_trigger" "optional" {
+  config {
+    project             = var.project
+    pipeline_id         = var.optional_pipeline_id
+    auth_method         = "default_azure_credential"
+    wait_for_completion = true
+    enabled             = var.run_optional_pipeline
+  }
+}
+
+action "azureactions_devops_pipeline_trigger" "always" {
+  config {
+    project     = var.project
+    pipeline_id = var.pipeline_id
+    auth_method = "default_azure_credential"
+  }
+}
+```
+
+The plan still lists the invocation when `enabled` is false.
+
 ## Retries and waiting
 
 **Triggering the run.** Queuing a pipeline run is not idempotent, so the trigger request is only retried when Azure DevOps cannot have queued a run: the connection was never made (for example the connection was refused or the host name did not resolve), the request was throttled (HTTP 429, honouring `Retry-After`), or the access token was rejected (HTTP 401 with `default_azure_credential`: retried once after requesting the token again). It makes at most 3 attempts in total, including that retry. A 401 with a personal access token is not retried, because the same token would be sent again. A server error, or a timeout or lost connection after the request was sent, is not retried, because a run may already have been queued: the error says so and names the pipeline, so check the pipeline's runs before applying again. The same warning is given when Azure DevOps accepted the request (HTTP 200 or 201) but its response could not be read or was not the API's JSON. Requests ask Azure DevOps to answer a credential it does not accept with HTTP 401 (the `X-TFS-FedAuthRedirect: Suppress` header) rather than a sign-in page; a sign-in page that still arrives as HTTP 203 is reported as a credential problem, not as a possibly queued run. Redirects are never followed: a redirect (usually to a sign-in page) ends the trigger without a retry, and the error says a run was most likely not queued and to check the pipeline's runs if unsure; during the wait it ends the wait like any other rejected request. If Microsoft Entra ID rejects the credential while the token is requested again, the trigger is not retried.
@@ -95,6 +136,7 @@ Each request for an access token, including the one before the run is triggered,
 ### Optional
 
 - `branch_ref` (String) Git ref to run the pipeline against, e.g. `refs/heads/main`. When omitted the pipeline's default branch is used.
+- `enabled` (Boolean) Whether the action triggers the pipeline. Defaults to true. When false, the action does nothing when it is invoked: it reports that the pipeline was not triggered and succeeds, without requesting a token or calling Azure DevOps. The rest of the configuration is still checked. Use it to switch a trigger on or off from a variable, for example in an `action_trigger` whose `actions` list must be static.
 - `personal_access_token` (String) Personal Access Token (PAT) used when `auth_method` is `"pat"`. Must have Build (Read & execute) permission. Provide this value via a Terraform sensitive variable or the `TF_VAR_PERSONAL_ACCESS_TOKEN` environment variable to avoid it appearing in plan output.
 - `stages_to_skip` (List of String) List of stage names to skip in the pipeline run.
 - `template_parameters` (Map of String) Template parameter values. Keys are parameter names, values are parameter values.
