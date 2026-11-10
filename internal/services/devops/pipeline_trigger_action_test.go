@@ -894,25 +894,117 @@ func TestPipelineTriggerAction_Invoke_EnabledTrue(t *testing.T) {
 	}
 }
 
-// TestPipelineTriggerAction_Invoke_DisabledStillValidatesAuthMethod verifies
-// that a disabled trigger still reports an invalid auth_method, so the mistake
-// shows up before the trigger is enabled.
-func TestPipelineTriggerAction_Invoke_DisabledStillValidatesAuthMethod(t *testing.T) {
+// TestPipelineTriggerAction_Invoke_DisabledStillValidatesConfig verifies that a
+// disabled trigger still reports configuration mistakes that need no network
+// call, so they show up before the trigger is enabled, and that it still makes
+// no token request and no Azure DevOps request.
+func TestPipelineTriggerAction_Invoke_DisabledStillValidatesConfig(t *testing.T) {
 	t.Parallel()
 
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+	disabled := map[string]tftypes.Value{"enabled": tftypes.NewValue(tftypes.Bool, false)}
+	tests := []struct {
+		name            string
+		organizationURL string
+		pipelineID      int64
+		authMethod      string
+		pat             string
+		wantSummary     string
+	}{
+		{"invalid auth_method", "https://dev.azure.com/myorg", 1, "oauth2_legacy", "", "invalid auth_method"},
+		{"missing personal_access_token", "https://dev.azure.com/myorg", 1, authMethodPAT, "", "resolving authentication"},
+		{"missing organization_url", "", 1, authMethodDAC, "", "missing provider organization_url"},
+		{"invalid pipeline_id", "https://dev.azure.com/myorg", 0, authMethodDAC, "", "invalid pipeline_id"},
+	}
+
+	for _, tc := range tests {
+		t.Run(tc.name, func(t *testing.T) {
+			t.Parallel()
+
+			var mu sync.Mutex
+			requests := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				mu.Lock()
+				requests++
+				mu.Unlock()
+				w.WriteHeader(http.StatusInternalServerError)
+			}))
+			defer server.Close()
+
+			a := &PipelineTriggerAction{
+				httpClient: &http.Client{
+					Transport: &testhelpers.HostRewriteTransport{Host: testhelpers.ServerHost(server.URL)},
+				},
+				pollInterval: 50 * time.Millisecond,
+			}
+			a.Configure(context.Background(), action.ConfigureRequest{ProviderData: newDevOpsTestClient(tc.organizationURL)}, &action.ConfigureResponse{})
+
+			cfg := buildDevOpsConfig(t,
+				"my-project", tc.pipelineID,
+				tc.authMethod, tc.pat, "",
+				nil, nil,
+				disabled,
+			)
+			resp, progress := invokeDevOpsAction(t, a, cfg)
+
+			errs := resp.Diagnostics.Errors()
+			if len(errs) != 1 || errs[0].Summary() != tc.wantSummary {
+				t.Fatalf("expected one %q error, got: %v", tc.wantSummary, resp.Diagnostics)
+			}
+			if len(progress) != 0 {
+				t.Errorf("expected no progress messages, got: %v", progress)
+			}
+			mu.Lock()
+			defer mu.Unlock()
+			if requests != 0 {
+				t.Errorf("expected no Azure DevOps requests, got %d", requests)
+			}
+			if scopes := a.Client.Credential.(*mockAzureTokenCredential).scopes; len(scopes) != 0 {
+				t.Errorf("expected no token request, got one for scopes %v", scopes)
+			}
+		})
+	}
+}
+
+// TestPipelineTriggerAction_Invoke_EnabledUnknown verifies that an unknown
+// enabled value fails rather than triggering or silently skipping the
+// pipeline, without a token request or an Azure DevOps request. Terraform
+// does not invoke an action whose configuration is unknown, so this is a
+// safeguard.
+func TestPipelineTriggerAction_Invoke_EnabledUnknown(t *testing.T) {
+	t.Parallel()
+
+	var mu sync.Mutex
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		requests++
+		mu.Unlock()
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
 	defer server.Close()
 
 	a := newTestAction(server)
 	cfg := buildDevOpsConfig(t,
 		"my-project", 1,
-		"oauth2_legacy", "", "",
+		authMethodDAC, "", "",
 		nil, nil,
-		map[string]tftypes.Value{"enabled": tftypes.NewValue(tftypes.Bool, false)},
+		map[string]tftypes.Value{"enabled": tftypes.NewValue(tftypes.Bool, tftypes.UnknownValue)},
 	)
-	resp, _ := invokeDevOpsAction(t, a, cfg)
+	resp, progress := invokeDevOpsAction(t, a, cfg)
 
-	if !resp.Diagnostics.HasError() {
-		t.Error("expected diagnostics error for invalid auth_method, got none")
+	errs := resp.Diagnostics.Errors()
+	if len(errs) != 1 || errs[0].Summary() != "invalid enabled" {
+		t.Fatalf("expected one %q error, got: %v", "invalid enabled", resp.Diagnostics)
+	}
+	if len(progress) != 0 {
+		t.Errorf("expected no progress messages, got: %v", progress)
+	}
+	mu.Lock()
+	defer mu.Unlock()
+	if requests != 0 {
+		t.Errorf("expected no Azure DevOps requests, got %d", requests)
+	}
+	if scopes := a.Client.Credential.(*mockAzureTokenCredential).scopes; len(scopes) != 0 {
+		t.Errorf("expected no token request, got one for scopes %v", scopes)
 	}
 }

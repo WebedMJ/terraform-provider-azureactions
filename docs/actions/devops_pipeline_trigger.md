@@ -70,16 +70,16 @@ action "azureactions_devops_pipeline_trigger" "example" {
 
 ## Switching the trigger on or off
 
-Set `enabled = false` to make an invocation do nothing: the action reports that it did not trigger the pipeline and succeeds, without requesting a token or calling Azure DevOps. The rest of the configuration is still checked (`auth_method` must be valid), so a mistake shows up before the trigger is enabled. `enabled` must be known when the action runs.
+Set `enabled = false` to make an invocation do nothing: the action reports that it did not trigger the pipeline and succeeds, without requesting a token or calling Azure DevOps. The rest of the configuration is still checked (`auth_method`, `personal_access_token` with `auth_method = "pat"`, `pipeline_id`, the provider's `organization_url` and the run settings), so a mistake shows up before the trigger is enabled. `enabled` must be known when the action runs.
 
-Use it to switch an action on or off from a variable. An `action_trigger`'s `actions` list must be static, and from Terraform 1.16 a `condition` that refers to a variable or local value makes `terraform plan -destroy` fail with "Reference to uninitialized variable" (a destroy plan evaluates the conditions of `after_create` triggers without the values they refer to). `enabled` is in the action's configuration, which a destroy plan does not evaluate for those triggers:
+Use it to switch an action on or off from a variable. An `action_trigger`'s `actions` list must be static, and from Terraform 1.16 a `condition` that refers to a variable or local value makes `terraform plan -destroy` and `terraform destroy` fail with "Reference to uninitialized variable" (a destroy plan evaluates the conditions of `after_create` triggers without the values they refer to). `enabled` is in the action's configuration, which a destroy plan does not evaluate for those triggers:
 
 ```terraform
 resource "terraform_data" "example" {
   lifecycle {
     action_trigger {
       events = [after_create]
-      # The optional run first: actions run in list order
+      # The optional action runs first: actions run in list order
       actions = [
         action.azureactions_devops_pipeline_trigger.optional,
         action.azureactions_devops_pipeline_trigger.always,
@@ -95,6 +95,14 @@ action "azureactions_devops_pipeline_trigger" "optional" {
     auth_method         = "default_azure_credential"
     wait_for_completion = true
     enabled             = var.run_optional_pipeline
+  }
+}
+
+action "azureactions_devops_pipeline_trigger" "always" {
+  config {
+    project     = var.project
+    pipeline_id = var.pipeline_id
+    auth_method = "default_azure_credential"
   }
 }
 ```
@@ -128,7 +136,7 @@ Each request for an access token, including the one before the run is triggered,
 ### Optional
 
 - `branch_ref` (String) Git ref to run the pipeline against, e.g. `refs/heads/main`. When omitted the pipeline's default branch is used.
-- `enabled` (Boolean) Whether the action triggers the pipeline. Defaults to true. When false, the action does nothing when it is invoked: it reports that the pipeline was not triggered and succeeds, without requesting a token or calling Azure DevOps. Use it to switch a trigger on or off from a variable, for example in an `action_trigger` whose `actions` list must be static.
+- `enabled` (Boolean) Whether the action triggers the pipeline. Defaults to true. When false, the action does nothing when it is invoked: it reports that the pipeline was not triggered and succeeds, without requesting a token or calling Azure DevOps. The rest of the configuration is still checked. Use it to switch a trigger on or off from a variable, for example in an `action_trigger` whose `actions` list must be static.
 - `personal_access_token` (String) Personal Access Token (PAT) used when `auth_method` is `"pat"`. Must have Build (Read & execute) permission. Provide this value via a Terraform sensitive variable or the `TF_VAR_PERSONAL_ACCESS_TOKEN` environment variable to avoid it appearing in plan output.
 - `stages_to_skip` (List of String) List of stage names to skip in the pipeline run.
 - `template_parameters` (Map of String) Template parameter values. Keys are parameter names, values are parameter values.

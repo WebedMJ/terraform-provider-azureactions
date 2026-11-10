@@ -232,8 +232,8 @@ func (p *PipelineTriggerAction) Schema(_ context.Context, _ action.SchemaRequest
 				Optional: true,
 				MarkdownDescription: "Whether the action triggers the pipeline. Defaults to true. When false, the action does nothing " +
 					"when it is invoked: it reports that the pipeline was not triggered and succeeds, without requesting a token or " +
-					"calling Azure DevOps. Use it to switch a trigger on or off from a variable, for example in an `action_trigger` " +
-					"whose `actions` list must be static.",
+					"calling Azure DevOps. The rest of the configuration is still checked. Use it to switch a trigger on or off from a " +
+					"variable, for example in an `action_trigger` whose `actions` list must be static.",
 			},
 		},
 	}
@@ -261,28 +261,14 @@ func (p *PipelineTriggerAction) Invoke(ctx context.Context, request action.Invok
 		return
 	}
 
-	// A disabled trigger does nothing: no token is requested and Azure DevOps
-	// is never called. The configuration is still checked above, so a mistake
-	// shows up before the trigger is enabled.
-	if model.Enabled.IsUnknown() {
-		sdk.SetResponseErrorDiagnostic(response, "invalid enabled",
-			"enabled must be known when the action is invoked")
-		return
-	}
-	if !model.Enabled.IsNull() && !model.Enabled.ValueBool() {
-		response.SendProgress(action.InvokeProgressEvent{
-			Message: fmt.Sprintf("Not triggering pipeline %d in project %s: enabled is false",
-				model.PipelineID.ValueInt64(), model.Project.ValueString()),
-		})
-		return
-	}
-
-	// Resolve the authorisation source. It is asked for a header on every
-	// request, so a long wait never polls with an expired token.
-	auth, err := p.resolveAuthSource(ctx, model)
-	if err != nil {
-		sdk.SetResponseErrorDiagnostic(response, "resolving authentication", err)
-		return
+	// Everything that needs no network call is checked before the enabled
+	// check, so a configuration mistake shows up while the trigger is still
+	// disabled.
+	if authMethod == authMethodPAT {
+		if err := checkPersonalAccessToken(model); err != nil {
+			sdk.SetResponseErrorDiagnostic(response, "resolving authentication", err)
+			return
+		}
 	}
 
 	orgURL, err := p.organizationURL()
@@ -304,6 +290,30 @@ func (p *PipelineTriggerAction) Invoke(ctx context.Context, request action.Invok
 	if pipelineID <= 0 {
 		sdk.SetResponseErrorDiagnostic(response, "invalid pipeline_id",
 			fmt.Errorf("pipeline_id must be greater than 0, got %d", pipelineID))
+		return
+	}
+
+	// A disabled trigger does nothing: no token is requested and Azure DevOps
+	// is never called. Terraform does not invoke an action whose
+	// configuration is unknown, so an unknown value is only a safeguard.
+	if model.Enabled.IsUnknown() {
+		sdk.SetResponseErrorDiagnostic(response, "invalid enabled",
+			"enabled must be known when the action is invoked")
+		return
+	}
+	if !model.Enabled.IsNull() && !model.Enabled.ValueBool() {
+		response.SendProgress(action.InvokeProgressEvent{
+			Message: fmt.Sprintf("Not triggering pipeline %d in project %s: enabled is false",
+				pipelineID, model.Project.ValueString()),
+		})
+		return
+	}
+
+	// Resolve the authorisation source. It is asked for a header on every
+	// request, so a long wait never polls with an expired token.
+	auth, err := p.resolveAuthSource(ctx, model)
+	if err != nil {
+		sdk.SetResponseErrorDiagnostic(response, "resolving authentication", err)
 		return
 	}
 
@@ -397,8 +407,8 @@ func (p *PipelineTriggerAction) organizationURL() (string, error) {
 func (p *PipelineTriggerAction) resolveAuthSource(ctx context.Context, model PipelineTriggerActionModel) (authHeaderSource, error) {
 	switch model.AuthMethod.ValueString() {
 	case authMethodPAT:
-		if model.PersonalAccessToken.IsNull() || model.PersonalAccessToken.IsUnknown() || model.PersonalAccessToken.ValueString() == "" {
-			return nil, fmt.Errorf("personal_access_token must be provided when auth_method is %q", authMethodPAT)
+		if err := checkPersonalAccessToken(model); err != nil {
+			return nil, err
 		}
 		encoded := base64.StdEncoding.EncodeToString([]byte(":" + model.PersonalAccessToken.ValueString()))
 		return staticAuthHeader("Basic " + encoded), nil
@@ -422,6 +432,15 @@ func (p *PipelineTriggerAction) resolveAuthSource(ctx context.Context, model Pip
 	default:
 		return nil, fmt.Errorf("unsupported auth_method: %q", model.AuthMethod.ValueString())
 	}
+}
+
+// checkPersonalAccessToken reports a missing personal_access_token for PAT
+// authentication.
+func checkPersonalAccessToken(model PipelineTriggerActionModel) error {
+	if model.PersonalAccessToken.IsNull() || model.PersonalAccessToken.IsUnknown() || model.PersonalAccessToken.ValueString() == "" {
+		return fmt.Errorf("personal_access_token must be provided when auth_method is %q", authMethodPAT)
+	}
+	return nil
 }
 
 // buildRequestBody constructs the JSON payload for the pipeline run API call.
